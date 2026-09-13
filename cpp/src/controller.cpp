@@ -564,7 +564,7 @@ tresult PLUGIN_API Controller::setComponentState(IBStream *state) {
     return kResultOk;
 }
 
-tresult PLUGIN_API Controller::beginEdit(ParamID tag) {
+tresult Controller::beginEdit(ParamID tag) {
     if (tag == kPitchBend) {
         if (pbSpringState_ == PbSpring::Springing) {
             // User grabbed the pitch bend mid-animation. Kill the timer and
@@ -579,7 +579,7 @@ tresult PLUGIN_API Controller::beginEdit(ParamID tag) {
     return EditController::beginEdit(tag);
 }
 
-tresult PLUGIN_API Controller::endEdit(ParamID tag) {
+tresult Controller::endEdit(ParamID tag) {
     tresult result = EditController::endEdit(tag);
     if (tag == kPitchBend && pbSpringState_ == PbSpring::UserDragging) {
         pbSpringState_ = PbSpring::Idle;
