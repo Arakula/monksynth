@@ -7,7 +7,11 @@ All notable changes to MonkSynth will be documented in this file.
 ### Added
 - Right-click menu now lists every theme installed in the user themes folder under "Theme: <current>", so switching themes no longer requires the file chooser. "Load Theme..." is still there for themes elsewhere on disk.
 - `themes/` directory in the repo for community-contributed themes, starting with "Smiley Face..." by gav (#20). Smiley Face ships inside the plugin bundle (`Contents/Resources/themes/`), appears in the theme menu on every platform, and is offered on the first-run setup screen as a one-click alternative to importing the classic theme. The classic import remains the primary onboarding path.
+- The five factory presets other than Monastary now carry the same plug-in name/vendor/category metadata Monastary had, so hosts that group presets by metadata list all six together. Sound settings are unchanged. Contributed by CosmicScribe64 (#30).
 - "About Theme..." in the right-click menu shows the active theme's credits: name, author, description and a clickable link, read from new optional `description` and `url` fields in `theme.json`. The imported classic theme credits AudioNerdz and links to audionerdz.nl.
+
+### Fixed
+- `Controller::beginEdit`/`endEdit` no longer declare `PLUGIN_API`, matching the SDK's `EditController` signature. Fixes compilation of 32-bit Windows builds. Contributed by Arakula (#26).
 
 ## [0.2.0-beta.15] - 2026-05-14
 
