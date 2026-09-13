@@ -15,6 +15,7 @@ namespace MonkSynth {
 class Controller;
 class InfoButton;
 class MonkView;
+class OverlayView;
 
 // Subclass that applies theme bitmaps before views are created, so that
 // controls like CAnimKnob see the real bitmap dimensions at init time.
@@ -108,8 +109,15 @@ class Controller : public Steinberg::Vst::EditController,
 
   private:
     void applyTheme(VST3Editor *editor);
+    // Persists |themeDir| as the active theme and rebuilds the editor UI
+    // with its bitmaps.
+    void switchTheme(ThemedVST3Editor *editor, const std::filesystem::path &themeDir,
+                     bool bundled);
+    // Adds a modal overlay to the editor's frame unless one is already open.
+    void presentOverlay(VST3Editor *editor, OverlayView *view);
     void showSetupOverlay(VST3Editor *editor);
     void showInfoOverlay(VST3Editor *editor);
+    void showThemeInfoOverlay(VST3Editor *editor);
 
     // Pitch-wheel spring-back: after the user releases the pitch bend slider,
     // ease the value back to center in a fresh edit gesture so the return
@@ -122,6 +130,10 @@ class Controller : public Steinberg::Vst::EditController,
     MonkView *monkView_ = nullptr;
     InfoButton *infoButton_ = nullptr;
     VST3Editor *currentEditor_ = nullptr;
+    // The overlay currently shown on currentEditor_'s frame, if any. Only
+    // compared by identity (never dereferenced) since recreateUI can destroy
+    // it without going through the close callback.
+    OverlayView *overlay_ = nullptr;
     ThemeManager themeManager_;
     int noteRefCount_ = 0;  // tracks active touches on vowel/pitch controls
     bool inSetParam_ = false; // re-entrancy guard for setParamNormalized

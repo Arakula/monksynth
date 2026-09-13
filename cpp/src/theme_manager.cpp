@@ -1,5 +1,7 @@
 #include "theme_manager.h"
+#include "plugin_paths.h"
 
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 
@@ -65,6 +67,20 @@ fs::path ThemeManager::getConfigPath() { return getConfigDir() / "config.json"; 
 
 fs::path ThemeManager::getThemesDir() { return getConfigDir() / "themes"; }
 
+fs::path ThemeManager::getBundledThemesDir() {
+    fs::path res = getPluginResourcesDir();
+    if (res.empty())
+        return {};
+    std::error_code ec;
+    fs::path dir = res / "themes";
+    return fs::is_directory(dir, ec) ? dir : fs::path{};
+}
+
+// Bundled themes are stored in config.json as "bundled:<folder>" rather than
+// an absolute path, so the choice survives plugin updates and is shared
+// between the VST3 and AU copies of the bundle.
+static const char *kBundledPrefix = "bundled:";
+
 // --- Constructor ---
 
 ThemeManager::ThemeManager() = default;
@@ -109,9 +125,21 @@ void ThemeManager::loadConfig() {
 
     std::string tp = jsonGetString(json, "themePath");
     if (!tp.empty()) {
-        fs::path candidate(tp);
-        if (fs::is_directory(candidate))
+        fs::path candidate;
+        std::string bundledName;
+        if (tp.rfind(kBundledPrefix, 0) == 0) {
+            bundledName = tp.substr(std::string(kBundledPrefix).size());
+            fs::path dir = getBundledThemesDir();
+            if (!dir.empty() && !bundledName.empty())
+                candidate = dir / bundledName;
+        } else {
+            candidate = fs::path(tp);
+        }
+        std::error_code ec;
+        if (!candidate.empty() && fs::is_directory(candidate, ec)) {
             themePath_ = candidate;
+            bundledName_ = bundledName;
+        }
     }
 
     std::string lang = jsonGetString(json, "language");
@@ -130,7 +158,9 @@ void ThemeManager::saveConfig() const {
         return;
 
     f << "{\n";
-    if (!themePath_.empty()) {
+    if (!bundledName_.empty()) {
+        f << "  \"themePath\": \"" << kBundledPrefix << bundledName_ << "\",\n";
+    } else if (!themePath_.empty()) {
         // Write path with forward slashes for cross-platform readability.
         std::string pathStr = themePath_.generic_string();
         f << "  \"themePath\": \"" << pathStr << "\",\n";
@@ -143,13 +173,15 @@ void ThemeManager::saveConfig() const {
 
 // --- Theme path management ---
 
-void ThemeManager::setThemePath(const fs::path &path) {
+void ThemeManager::setThemePath(const fs::path &path, bool bundled) {
     themePath_ = path;
+    bundledName_ = bundled ? path.filename().string() : std::string();
     saveConfig();
 }
 
 void ThemeManager::resetTheme() {
     themePath_.clear();
+    bundledName_.clear();
     saveConfig();
 }
 
@@ -178,19 +210,83 @@ std::optional<fs::path> ThemeManager::resolveThemeBitmap(const std::string &bitm
 
 // --- Theme metadata ---
 
-std::string ThemeManager::getThemeName() const {
-    if (themePath_.empty())
-        return "Default";
+// Parse a theme folder's theme.json. Missing manifest or fields leave the
+// corresponding strings empty, except |name| which falls back to the folder
+// name so every theme has something to display.
+static ThemeManager::ThemeInfo readThemeManifest(const fs::path &themeDir) {
+    ThemeManager::ThemeInfo info;
+    info.name = themeDir.filename().string();
 
-    fs::path manifest = themePath_ / "theme.json";
-    std::ifstream f(manifest);
+    std::ifstream f(themeDir / "theme.json");
     if (!f.is_open())
-        return themePath_.filename().string();
+        return info;
 
     std::ostringstream ss;
     ss << f.rdbuf();
-    std::string name = jsonGetString(ss.str(), "name");
-    return name.empty() ? themePath_.filename().string() : name;
+    const std::string json = ss.str();
+
+    std::string name = jsonGetString(json, "name");
+    if (!name.empty())
+        info.name = name;
+    info.author = jsonGetString(json, "author");
+    info.version = jsonGetString(json, "version");
+    info.description = jsonGetString(json, "description");
+    info.url = jsonGetString(json, "url");
+    return info;
+}
+
+static std::string readThemeName(const fs::path &themeDir) {
+    return readThemeManifest(themeDir).name;
+}
+
+std::string ThemeManager::getThemeName() const { return getThemeInfo().name; }
+
+ThemeManager::ThemeInfo ThemeManager::getThemeInfo() const {
+    if (themePath_.empty())
+        return {"Default", {}, {}, {}, {}};
+
+    ThemeInfo info = readThemeManifest(themePath_);
+
+    // Classic themes imported before the extractor wrote credits have only a
+    // name and version; fill in the AudioNerdz attribution so existing
+    // installs don't need to re-import.
+    std::error_code ec;
+    if (info.author.empty() && fs::equivalent(themePath_, getClassicThemeDir(), ec)) {
+        info.author = kClassicThemeAuthor;
+        if (info.description.empty())
+            info.description = kClassicThemeDescription;
+        if (info.url.empty())
+            info.url = kClassicThemeUrl;
+    }
+    return info;
+}
+
+static void scanThemesDir(const fs::path &dir, bool bundled,
+                          std::vector<ThemeManager::InstalledTheme> &out) {
+    if (dir.empty())
+        return;
+    std::error_code ec;
+    fs::directory_iterator it(dir, ec);
+    if (ec)
+        return;
+
+    for (const auto &entry : it) {
+        if (!entry.is_directory(ec) || ec)
+            continue;
+        if (!fs::is_regular_file(entry.path() / "theme.json", ec))
+            continue;
+        out.push_back({readThemeName(entry.path()), entry.path(), bundled});
+    }
+}
+
+std::vector<ThemeManager::InstalledTheme> ThemeManager::listInstalledThemes() {
+    std::vector<InstalledTheme> themes;
+    scanThemesDir(getThemesDir(), false, themes);
+    scanThemesDir(getBundledThemesDir(), true, themes);
+
+    std::sort(themes.begin(), themes.end(),
+              [](const InstalledTheme &a, const InstalledTheme &b) { return a.name < b.name; });
+    return themes;
 }
 
 // --- Classic theme support ---

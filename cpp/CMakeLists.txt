@@ -106,11 +106,18 @@ smtg_add_vst3plugin(MonkSynth
     src/dll_extractor.cpp
     src/setup_view.h
     src/setup_view.cpp
+    src/draw_utils.h
+    src/overlay_view.h
+    src/overlay_view.cpp
     src/info_view.h
     src/info_view.cpp
+    src/theme_info_view.h
+    src/theme_info_view.cpp
     src/info_button.h
     src/info_button.cpp
     src/open_url.h
+    src/plugin_paths.h
+    src/plugin_paths.cpp
     src/open_url.cpp
     src/i18n.h
     src/i18n.cpp
@@ -135,6 +142,22 @@ smtg_target_add_plugin_resources(MonkSynth
         resources/fader-right-sm.png
         resources/info.png
 )
+
+# Themes shipped inside the plugin bundle (Contents/Resources/themes/<name>).
+# Each entry is a folder under ../themes. The plugin lists them in its theme
+# menu and offers one on the setup screen (the first by display name).
+set(MONKSYNTH_BUNDLED_THEMES smileyface)
+foreach(theme ${MONKSYNTH_BUNDLED_THEMES})
+    file(GLOB theme_files CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/../themes/${theme}/*.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../themes/${theme}/*.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../themes/${theme}/*.txt"
+    )
+    smtg_target_add_plugin_resources(MonkSynth
+        RESOURCES ${theme_files}
+        OUTPUT_SUBDIRECTORY "themes/${theme}"
+    )
+endforeach()
 
 if(APPLE)
     smtg_target_set_bundle(MonkSynth

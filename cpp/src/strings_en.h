@@ -23,6 +23,8 @@ constexpr const char *kStringsEn[] = {
     "\"Delay Lama.dll\" file.",
     // SetupImportButton
     "Import Classic Theme...",
+    // SetupOrBuiltIn
+    "Or use the built-in theme: ",
 
     // InfoCreatedBy
     "Created by Jonathan Taylor",
@@ -36,6 +38,10 @@ constexpr const char *kStringsEn[] = {
     "Open source and free forever.",
     // InfoClose
     "Close",
+    // ThemeInfoAuthorPrefix
+    "by ",
+    // ThemeInfoNoDetails
+    "No additional information provided.",
 
     // ContributeHeader
     "Create your own theme!",
@@ -54,6 +60,10 @@ constexpr const char *kStringsEn[] = {
     "Import Classic Theme from DLL...",
     // MenuOpenFolder
     "Open Themes Folder",
+    // MenuAboutTheme
+    "About Theme...",
+    // MenuBuiltInSuffix
+    " (built-in)",
     // MenuLanguage
     "Language",
     // MenuLanguageAuto

@@ -1,5 +1,6 @@
 #include "setup_view.h"
 #include "i18n.h"
+#include "draw_utils.h"
 #include "open_url.h"
 #include "theme_manager.h"
 #include "version.h"
@@ -20,8 +21,13 @@ SetupView::SetupView(const CRect &size) : CViewContainer(size) {
     // Import button position (relative to view)
     double bw = 220, bh = 36;
     double bx = (size.getWidth() - bw) / 2;
-    double by = 345;
+    double by = 308;
     importBtnRect_ = CRect(bx, by, bx + bw, by + bh);
+}
+
+void SetupView::setBuiltInThemes(std::vector<ThemeManager::InstalledTheme> themes) {
+    builtInThemes_ = std::move(themes);
+    setDirty(true);
 }
 
 void SetupView::setStatusText(const std::string &text) {
@@ -29,16 +35,23 @@ void SetupView::setStatusText(const std::string &text) {
     setDirty(true);
 }
 
-// Draw a rounded rectangle using anti-aliased lines and fills.
-static void drawRoundRect(CDrawContext *ctx, const CRect &r, CCoord radius, bool fill) {
-    auto *path = ctx->createRoundRectGraphicsPath(r, radius);
-    if (!path)
-        return;
-    if (fill)
-        ctx->drawGraphicsPath(path, CDrawContext::kPathFilled);
-    else
-        ctx->drawGraphicsPath(path, CDrawContext::kPathStroked);
-    path->forget();
+// Shorten |text| with a trailing ellipsis until it fits |maxWidth| in the
+// context's current font. Cuts at UTF-8 character boundaries.
+static std::string ellipsize(CDrawContext *ctx, std::string text, CCoord maxWidth) {
+    static const char *kEllipsis = "\xE2\x80\xA6";
+    if (ctx->getStringWidth(text.c_str()) <= maxWidth)
+        return text;
+    while (!text.empty()) {
+        // Drop one UTF-8 character from the end.
+        size_t i = text.size() - 1;
+        while (i > 0 && (static_cast<unsigned char>(text[i]) & 0xC0) == 0x80)
+            i--;
+        text.erase(i);
+        std::string candidate = text + kEllipsis;
+        if (ctx->getStringWidth(candidate.c_str()) <= maxWidth)
+            return candidate;
+    }
+    return kEllipsis;
 }
 
 void SetupView::drawBackgroundRect(CDrawContext *ctx, const CRect & /*rect*/) {
@@ -108,7 +121,6 @@ void SetupView::drawBackgroundRect(CDrawContext *ctx, const CRect & /*rect*/) {
     ctx->setFont(bodyFont);
     ctx->setFontColor(CColor(190, 190, 190, 255));
     const char *lines2[] = {
-        "",
         i18n::str(i18n::StringId::SetupThenClick1),
         i18n::str(i18n::StringId::SetupThenClick2),
     };
@@ -122,7 +134,7 @@ void SetupView::drawBackgroundRect(CDrawContext *ctx, const CRect & /*rect*/) {
     CRect btn = importBtnRect_;
     btn.offset(bounds.left, bounds.top);
     ctx->setFillColor(CColor(200, 150, 50, 255));
-    drawRoundRect(ctx, btn, 6, true);
+    drawRoundRect(ctx, btn, 6);
 
     ctx->setFont(btnFont);
     ctx->setFontColor(CColor(30, 30, 35, 255));
@@ -135,6 +147,38 @@ void SetupView::drawBackgroundRect(CDrawContext *ctx, const CRect & /*rect*/) {
         ctx->setFontColor(CColor(220, 180, 100, 255));
         CRect statusRect(bounds.left + 20, btn.bottom + 5, bounds.right - 20, btn.bottom + 20);
         ctx->drawString(statusText_.c_str(), statusRect, kCenterText);
+    }
+
+    // Built-in theme shortcut: "Or use the built-in theme: <name>" on one
+    // line, with only the name drawn as a link. Deliberately low-key so the
+    // classic import above stays the obvious path.
+    builtInLinkRect_ = CRect();
+    if (!builtInThemes_.empty()) {
+        const std::string prefix = i18n::str(i18n::StringId::SetupOrBuiltIn);
+        const CCoord usable = bounds.getWidth() - 40;
+
+        ctx->setFont(bodyFont);
+        CCoord wPrefix = ctx->getStringWidth(prefix.c_str());
+        // Theme names are unbounded community input: keep the whole line
+        // inside the view.
+        ctx->setFont(linkFont);
+        std::string name = ellipsize(ctx, builtInThemes_.front().name, usable - wPrefix);
+        CCoord wName = ctx->getStringWidth(name.c_str());
+
+        double ly = btn.bottom + 30;
+        double x0 = bounds.left + (bounds.getWidth() - (wPrefix + wName)) / 2;
+
+        ctx->setFont(bodyFont);
+        ctx->setFontColor(CColor(150, 150, 155, 255));
+        CRect prefixRect(x0, ly, x0 + wPrefix, ly + 18);
+        ctx->drawString(prefix.c_str(), prefixRect, kLeftText);
+
+        ctx->setFont(linkFont);
+        ctx->setFontColor(CColor(130, 170, 255, 255));
+        CRect nameRect(x0 + wPrefix, ly, x0 + wPrefix + wName, ly + 18);
+        ctx->drawString(name.c_str(), nameRect, kLeftText);
+        builtInLinkRect_ = nameRect;
+        builtInLinkRect_.offset(-bounds.left, -bounds.top);
     }
 
     // ---- Contribute section ----
@@ -200,6 +244,12 @@ CMouseEventResult SetupView::onMouseDown(CPoint &where, const CButtonState &butt
         return kMouseEventHandled;
     }
 
+    if (!builtInThemes_.empty() && builtInLinkRect_.pointInside(local)) {
+        if (builtInCb_)
+            builtInCb_(builtInThemes_.front().path);
+        return kMouseEventHandled;
+    }
+
     return kMouseEventNotHandled;
 }
 
@@ -211,7 +261,8 @@ CMouseEventResult SetupView::onMouseMoved(CPoint &where, const CButtonState & /*
     auto *frame = getFrame();
     if (frame) {
         if (importBtnRect_.pointInside(local) || urlLinkRect_.pointInside(local) ||
-            openFolderRect_.pointInside(local))
+            openFolderRect_.pointInside(local) ||
+            (!builtInThemes_.empty() && builtInLinkRect_.pointInside(local)))
             frame->setCursor(kCursorHand);
         else
             frame->setCursor(kCursorDefault);

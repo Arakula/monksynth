@@ -6,54 +6,17 @@
 
 #include "vstgui/lib/cdrawcontext.h"
 #include "vstgui/lib/cfont.h"
-#include "vstgui/lib/cframe.h"
-#include "vstgui/lib/cgraphicspath.h"
-#include "vstgui/lib/cstring.h"
-#include "vstgui/lib/cvstguitimer.h"
 
 using namespace VSTGUI;
 
 namespace MonkSynth {
 
-InfoView::InfoView(const CRect &size) : CViewContainer(size) {
-    setTransparency(false);
-
-    double bw = 120, bh = 36;
-    double bx = (size.getWidth() - bw) / 2;
-    double by = size.getHeight() - 60;
-    closeBtnRect_ = CRect(bx, by, bx + bw, by + bh);
-}
-
-static void drawRoundRect(CDrawContext *ctx, const CRect &r, CCoord radius, bool fill) {
-    auto *path = ctx->createRoundRectGraphicsPath(r, radius);
-    if (!path)
-        return;
-    if (fill)
-        ctx->drawGraphicsPath(path, CDrawContext::kPathFilled);
-    else
-        ctx->drawGraphicsPath(path, CDrawContext::kPathStroked);
-    path->forget();
-}
-
-void InfoView::drawBackgroundRect(CDrawContext *ctx, const CRect & /*rect*/) {
-    CRect bounds = getViewSize();
+void InfoView::drawBody(CDrawContext *ctx, const CRect &bounds) {
     const char *font = i18n::uiFont();
-
-    ctx->setDrawMode(kAntiAliasing | kNonIntegralMode);
-
-    // Dark background
-    ctx->setFillColor(CColor(30, 30, 35, 255));
-    ctx->drawRect(bounds, kDrawFilled);
-
-    // Accent line
-    CRect accent(bounds.left + 30, bounds.top + 40, bounds.right - 30, bounds.top + 42);
-    ctx->setFillColor(CColor(200, 150, 50, 255));
-    ctx->drawRect(accent, kDrawFilled);
 
     auto *titleFont = new CFontDesc(font, 24, kBoldFace);
     auto *bodyFont = new CFontDesc(font, 13);
     auto *smallFont = new CFontDesc(font, 11);
-    auto *btnFont = new CFontDesc(font, 14, kBoldFace);
     auto *linkFont = new CFontDesc(font, 13, kUnderlineFace);
     auto *sectionFont = new CFontDesc(font, 14, kBoldFace);
 
@@ -99,7 +62,7 @@ void InfoView::drawBackgroundRect(CDrawContext *ctx, const CRect & /*rect*/) {
     ctx->setFontColor(CColor(130, 170, 255, 255));
     CRect linkRect(bounds.left + 20, y, bounds.right - 20, y + 18);
     ctx->drawString("github.com/JonET/monksynth", linkRect, kCenterText);
-    githubLinkRect_ = CRect(bounds.left + 20, y, bounds.right - 20, y + 18);
+    githubLinkRect_ = linkRect;
     githubLinkRect_.offset(-bounds.left, -bounds.top);
 
     // Description
@@ -147,74 +110,25 @@ void InfoView::drawBackgroundRect(CDrawContext *ctx, const CRect & /*rect*/) {
     openFolderRect_ = folderRect;
     openFolderRect_.offset(-bounds.left, -bounds.top);
 
-    // Close button
-    CRect btn = closeBtnRect_;
-    btn.offset(bounds.left, bounds.top);
-    ctx->setFillColor(CColor(200, 150, 50, 255));
-    drawRoundRect(ctx, btn, 6, true);
-
-    ctx->setFont(btnFont);
-    ctx->setFontColor(CColor(30, 30, 35, 255));
-    ctx->drawString(i18n::str(i18n::StringId::InfoClose), btn, kCenterText);
-
     titleFont->forget();
     bodyFont->forget();
     smallFont->forget();
-    btnFont->forget();
     linkFont->forget();
     sectionFont->forget();
 }
 
-CMouseEventResult InfoView::onMouseDown(CPoint &where, const CButtonState &buttons) {
-    if (!(buttons & kLButton))
-        return kMouseEventNotHandled;
-
-    CRect bounds = getViewSize();
-    CPoint local = where;
-    local.offset(-bounds.left, -bounds.top);
-
-    if (closeBtnRect_.pointInside(local)) {
-        if (closeCb_) {
-            auto cb = closeCb_;
-            Call::later([cb]() { cb(); });
-        }
-        return kMouseEventHandled;
-    }
-
+bool InfoView::hitLink(const CPoint &local, bool click) {
     if (githubLinkRect_.pointInside(local)) {
-        openURL("https://github.com/JonET/monksynth");
-        return kMouseEventHandled;
+        if (click)
+            openURL("https://github.com/JonET/monksynth");
+        return true;
     }
-
     if (openFolderRect_.pointInside(local)) {
-        openFolder(ThemeManager::getThemesDir());
-        return kMouseEventHandled;
+        if (click)
+            openFolder(ThemeManager::getThemesDir());
+        return true;
     }
-
-    return kMouseEventHandled; // consume all clicks so they don't pass through
-}
-
-CMouseEventResult InfoView::onMouseMoved(CPoint &where, const CButtonState & /*buttons*/) {
-    CRect bounds = getViewSize();
-    CPoint local = where;
-    local.offset(-bounds.left, -bounds.top);
-
-    auto *frame = getFrame();
-    if (frame) {
-        if (closeBtnRect_.pointInside(local) || githubLinkRect_.pointInside(local) ||
-            openFolderRect_.pointInside(local))
-            frame->setCursor(kCursorHand);
-        else
-            frame->setCursor(kCursorDefault);
-    }
-    return kMouseEventHandled;
-}
-
-CMouseEventResult InfoView::onMouseExited(CPoint & /*where*/, const CButtonState & /*buttons*/) {
-    auto *frame = getFrame();
-    if (frame)
-        frame->setCursor(kCursorDefault);
-    return kMouseEventHandled;
+    return false;
 }
 
 } // namespace MonkSynth

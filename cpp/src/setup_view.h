@@ -1,9 +1,13 @@
 #pragma once
 
+#include "theme_manager.h"
+
 #include "vstgui/lib/cviewcontainer.h"
 
+#include <filesystem>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace MonkSynth {
 
@@ -14,8 +18,14 @@ class SetupView : public VSTGUI::CViewContainer {
     SetupView(const VSTGUI::CRect &size);
 
     using ImportCallback = std::function<void()>;
+    using ThemeCallback = std::function<void(const std::filesystem::path &)>;
 
     void setImportCallback(ImportCallback cb) { importCb_ = std::move(cb); }
+
+    // Themes shipped inside the plugin bundle. If non-empty, the first one is
+    // offered as a one-click alternative to importing the classic theme.
+    void setBuiltInThemes(std::vector<ThemeManager::InstalledTheme> themes);
+    void setBuiltInThemeCallback(ThemeCallback cb) { builtInCb_ = std::move(cb); }
 
     void setStatusText(const std::string &text);
 
@@ -31,8 +41,11 @@ class SetupView : public VSTGUI::CViewContainer {
     VSTGUI::CRect importBtnRect_;
     VSTGUI::CRect urlLinkRect_;
     VSTGUI::CRect openFolderRect_;
+    VSTGUI::CRect builtInLinkRect_;
     std::string statusText_;
+    std::vector<ThemeManager::InstalledTheme> builtInThemes_;
     ImportCallback importCb_;
+    ThemeCallback builtInCb_;
 };
 
 } // namespace MonkSynth

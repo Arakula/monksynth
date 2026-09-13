@@ -84,9 +84,17 @@ If your distro isn't listed it most likely still works — these are smoke-teste
 
 ## Themes
 
-MonkSynth ships without a built-in theme. On first launch, it shows a setup screen where you can import the classic look from the original Delay Lama DLL (available as freeware from [audionerdz.nl](http://www.audionerdz.nl/download.htm)).
+On first launch, MonkSynth shows a setup screen where you can import the classic look from the original Delay Lama DLL (available as freeware from [audionerdz.nl](http://www.audionerdz.nl/download.htm)). That's the recommended path. The setup screen also offers the built-in "Smiley Face..." theme by gav as a one-click alternative if you'd rather not hunt down the DLL.
 
-You can also load custom themes via right-click on the plugin GUI. A theme folder contains a `theme.json` manifest and any combination of these PNG files (missing ones fall back to 1x1 placeholders):
+Right-click the plugin GUI to switch between installed themes, load a theme from anywhere on disk, or open the themes folder. Themes live in a per-user folder:
+
+- macOS: `~/Library/Application Support/MonkSynth/themes/`
+- Windows: `%APPDATA%\MonkSynth\themes\`
+- Linux: `~/.config/MonkSynth/themes/`
+
+Community themes are collected in [`themes/`](themes/) in this repo. Themes named in `MONKSYNTH_BUNDLED_THEMES` in [`cpp/CMakeLists.txt`](cpp/CMakeLists.txt) are packaged inside the plugin bundle and show up in the menu automatically; to use any other, copy its folder into the themes folder above and pick it from the right-click menu.
+
+A theme folder contains a `theme.json` manifest and any combination of these PNG files (missing ones fall back to 1x1 placeholders):
 
 - `background.png` — main background (360x510)
 - `monk-strip.png` — animation sprite sheet (5x6 grid, 311x311 frames)
@@ -94,7 +102,19 @@ You can also load custom themes via right-click on the plugin GUI. A theme folde
 - `fader-down-large.png` / `fader-down-sm.png` / `fader-right-sm.png` — fader handles
 - `info.png` — info overlay (253x275)
 
-**Looking for fresh default themes to ship with the plugin.** If you design a theme you're proud of, open a PR — I'd love to include contributed themes in the next release. The right-click menu has an "Open Themes Folder" item that reveals where themes live on disk.
+`theme.json` holds the theme's credits, shown via right-click → "About Theme...". All fields are optional except `name`; values are plain single-line strings (no `\"` escapes):
+
+```json
+{
+  "name": "Smiley Face...",
+  "author": "gav",
+  "version": "1.0",
+  "description": "One or two sentences about the theme and what it references.",
+  "url": "https://example.com/link-to-the-inspiration"
+}
+```
+
+**Looking for fresh default themes to ship with the plugin.** If you design a theme you're proud of, open a PR adding it under `themes/<your-theme>/` — I'd love to include contributed themes in the next release. The right-click menu has an "Open Themes Folder" item that reveals where themes live on disk.
 
 ## Translations
 

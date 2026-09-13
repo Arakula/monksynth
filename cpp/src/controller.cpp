@@ -5,9 +5,11 @@
 #include "info_button.h"
 #include "info_view.h"
 #include "monk_view.h"
+#include "overlay_view.h"
 #include "open_url.h"
 #include "plugin_cids.h"
 #include "setup_view.h"
+#include "theme_info_view.h"
 #include "xy_pad.h"
 
 #include "public.sdk/source/vst/vstparameters.h"
@@ -19,12 +21,14 @@
 #include "vstgui/lib/platform/platformfactory.h"
 #include "vstgui/uidescription/uidescription.h"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 using namespace VSTGUI;
+namespace fs = std::filesystem;
 
 namespace MonkSynth {
 
@@ -113,6 +117,19 @@ void Controller::showSetupOverlay(VST3Editor *editor) {
     auto *setup = new SetupView(CRect(0, 0, 360, 510));
     auto *themedEditor = static_cast<ThemedVST3Editor *>(editor);
 
+    // Offer themes shipped inside the bundle as a one-click alternative.
+    std::vector<ThemeManager::InstalledTheme> bundled;
+    for (auto &t : ThemeManager::listInstalledThemes())
+        if (t.bundled)
+            bundled.push_back(t);
+    setup->setBuiltInThemes(std::move(bundled));
+    setup->setBuiltInThemeCallback([this, themedEditor](const fs::path &themeDir) {
+        // Same deferral as the import path: don't rebuild views from inside
+        // the click handler of a view that's about to be destroyed.
+        Call::later(
+            [this, themedEditor, themeDir]() { switchTheme(themedEditor, themeDir, true); });
+    });
+
     setup->setImportCallback([this, frame, setup, themedEditor]() {
         auto *selector = CNewFileSelector::create(frame, CNewFileSelector::kSelectFile);
         if (!selector)
@@ -132,16 +149,12 @@ void Controller::showSetupOverlay(VST3Editor *editor) {
                 auto result = extractClassicTheme(dllPath, configDir);
 
                 if (result.success) {
-                    themeManager_.setThemePath(result.themeDir);
                     // Defer UI recreation until after the file selector callback
                     // returns — recreating views inside the callback causes
                     // broken event handling on Linux.
-                    Call::later([this, themedEditor]() {
-                        auto *desc = themedEditor->getUIDescription();
-                        if (desc)
-                            desc->freePlatformResources();
-                        applyTheme(themedEditor);
-                        themedEditor->recreateUI();
+                    auto themeDir = result.themeDir;
+                    Call::later([this, themedEditor, themeDir]() {
+                        switchTheme(themedEditor, themeDir, false);
                     });
                 } else {
                     setup->setStatusText(result.error);
@@ -158,20 +171,37 @@ void Controller::showSetupOverlay(VST3Editor *editor) {
     frame->addView(setup);
 }
 
-void Controller::showInfoOverlay(VST3Editor *editor) {
-    auto *frame = editor->getFrame();
-    if (!frame)
+void Controller::presentOverlay(VST3Editor *editor, OverlayView *view) {
+    auto *frame = editor ? editor->getFrame() : nullptr;
+    // Refuse if the editor is gone (deferred call after willClose) or an
+    // overlay is already up (right-click passes through overlays to the
+    // context menu, so About Theme... could otherwise stack).
+    if (editor != currentEditor_ || !frame || (overlay_ && frame->isChild(overlay_))) {
+        view->forget();
         return;
+    }
+    overlay_ = view;
+    view->setCloseCallback([this, frame, view]() {
+        frame->removeView(view);
+        if (overlay_ == view)
+            overlay_ = nullptr;
+    });
+    frame->addView(view);
+}
 
-    auto *info = new InfoView(CRect(0, 0, 360, 510));
-    info->setCloseCallback([frame, info]() { frame->removeView(info); });
-    frame->addView(info);
+void Controller::showInfoOverlay(VST3Editor *editor) {
+    presentOverlay(editor, new InfoView(CRect(0, 0, 360, 510)));
+}
+
+void Controller::showThemeInfoOverlay(VST3Editor *editor) {
+    presentOverlay(editor, new ThemeInfoView(CRect(0, 0, 360, 510), themeManager_.getThemeInfo()));
 }
 
 void Controller::willClose(VST3Editor * /*editor*/) {
     monkView_ = nullptr;
     infoButton_ = nullptr;
     currentEditor_ = nullptr;
+    overlay_ = nullptr;
 }
 
 void Controller::applyTheme(VST3Editor *editor) {
@@ -198,17 +228,92 @@ void Controller::applyTheme(VST3Editor *editor) {
     }
 }
 
+void Controller::switchTheme(ThemedVST3Editor *editor, const std::filesystem::path &themeDir,
+                             bool bundled) {
+    // The folder may have been deleted since the menu was built.
+    std::error_code ec;
+    if (!fs::is_directory(themeDir, ec))
+        return;
+    themeManager_.setThemePath(themeDir, bundled);
+
+    // Callers defer via Call::later or async file dialogs; the editor may
+    // have closed in the meantime. The choice above is still persisted.
+    if (editor != currentEditor_)
+        return;
+    overlay_ = nullptr; // recreateUI destroys it
+    auto *desc = editor->getUIDescription();
+    if (desc)
+        desc->freePlatformResources();
+    applyTheme(editor);
+    editor->recreateUI();
+}
+
 COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *editor) {
     auto *menu = new COptionMenu();
     auto *themedEditor = static_cast<ThemedVST3Editor *>(editor);
 
-    // Show current theme name as a disabled header.
-    std::string themeName = themeManager_.getThemeName();
-    CCommandMenuItem::Desc headerDesc(
-        std::string(i18n::str(i18n::StringId::MenuThemePrefix)) + themeName);
-    headerDesc.flags = CMenuItem::kDisabled;
-    auto *header = new CCommandMenuItem(std::move(headerDesc));
-    menu->addEntry(header);
+    // ---- Theme switcher submenu ----
+    // Labelled "Theme: <current>" so the active theme is visible without
+    // opening it (kChecked alone isn't rendered reliably by all hosts).
+    // Lists every theme folder under the user themes dir; if the active
+    // theme was loaded from somewhere else it's appended so it still shows
+    // as checked.
+    std::string themeLabel =
+        std::string(i18n::str(i18n::StringId::MenuThemePrefix)) + themeManager_.getThemeName();
+    auto installed = ThemeManager::listInstalledThemes();
+    auto isActive = [this](const fs::path &p) {
+        std::error_code ec;
+        return themeManager_.hasTheme() && fs::equivalent(p, themeManager_.themePath(), ec);
+    };
+    bool activeListed = std::any_of(installed.begin(), installed.end(),
+                                    [&](const auto &t) { return isActive(t.path); });
+    if (themeManager_.hasTheme() && !activeListed)
+        installed.push_back({themeManager_.getThemeName(), themeManager_.themePath(), false});
+
+    if (installed.empty()) {
+        // Nothing to switch between; fall back to a disabled header.
+        CCommandMenuItem::Desc headerDesc{UTF8String(themeLabel)};
+        headerDesc.flags = CMenuItem::kDisabled;
+        menu->addEntry(new CCommandMenuItem(std::move(headerDesc)));
+    } else {
+        auto *themeMenu = new COptionMenu();
+        for (const auto &t : installed) {
+            // A user copy of a bundled theme has the same display name, so
+            // mark the read-only one to tell them apart.
+            std::string label = t.name;
+            if (t.bundled)
+                label += i18n::str(i18n::StringId::MenuBuiltInSuffix);
+            CCommandMenuItem::Desc desc{UTF8String(label)};
+            // The active theme is shown checked and disabled: re-selecting
+            // it would only rebuild the UI for nothing.
+            if (isActive(t.path))
+                desc.flags |= CMenuItem::kChecked | CMenuItem::kDisabled;
+            auto *item = new CCommandMenuItem(std::move(desc));
+            fs::path themeDir = t.path;
+            bool bundled = t.bundled;
+            item->setActions([this, themedEditor, themeDir, bundled](CCommandMenuItem *) {
+                // Rebuilding the view tree while the menu's tracking loop is
+                // still running tears down the menu's own parent; defer.
+                Call::later([this, themedEditor, themeDir, bundled]() {
+                    switchTheme(themedEditor, themeDir, bundled);
+                });
+            });
+            themeMenu->addEntry(item);
+        }
+        // addEntry takes its own reference to the submenu; drop ours.
+        menu->addEntry(themeMenu, UTF8String(themeLabel));
+        themeMenu->forget();
+    }
+
+    // "About Theme..." — credits and link from the active theme's theme.json.
+    if (themeManager_.hasTheme()) {
+        auto *aboutItem = new CCommandMenuItem(
+            CCommandMenuItem::Desc(i18n::str(i18n::StringId::MenuAboutTheme)));
+        aboutItem->setActions([this, themedEditor](CCommandMenuItem *) {
+            Call::later([this, themedEditor]() { showThemeInfoOverlay(themedEditor); });
+        });
+        menu->addEntry(aboutItem);
+    }
 
     menu->addSeparator();
 
@@ -242,12 +347,7 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
                 try {
                     if (sel->getNumSelectedFiles() > 0) {
                         auto file = pathFromUTF8(sel->getSelectedFile(0));
-                        themeManager_.setThemePath(file.parent_path());
-                        auto *desc = themedEditor->getUIDescription();
-                        if (desc)
-                            desc->freePlatformResources();
-                        applyTheme(themedEditor);
-                        themedEditor->recreateUI();
+                        switchTheme(themedEditor, file.parent_path(), false);
                     }
                 } catch (...) {
                 }
@@ -293,14 +393,8 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
                     auto configDir = themeManager_.getClassicThemeDir().parent_path().parent_path();
                     auto result = extractClassicTheme(dllPath, configDir);
 
-                    if (result.success) {
-                        themeManager_.setThemePath(result.themeDir);
-                        auto *desc = themedEditor->getUIDescription();
-                        if (desc)
-                            desc->freePlatformResources();
-                        applyTheme(themedEditor);
-                        themedEditor->recreateUI();
-                    }
+                    if (result.success)
+                        switchTheme(themedEditor, result.themeDir, false);
                 } catch (...) {
                 }
             });
@@ -346,6 +440,7 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
         langMenu->addEntry(langItem);
     }
     menu->addEntry(langMenu, i18n::str(i18n::StringId::MenuLanguage));
+    langMenu->forget();
 
     // ---- Pitch Bend routing submenu ----
     auto *pbMenu = new COptionMenu();
@@ -403,6 +498,7 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
     std::string pbLabel = std::string(i18n::str(i18n::StringId::MenuPitchBend)) + ": " +
                           i18n::str(currentLabel);
     menu->addEntry(pbMenu, UTF8String(pbLabel));
+    pbMenu->forget();
 
     // No "Reset to Default" — there's no built-in theme. Users switch
     // between imported themes or re-import from the DLL.

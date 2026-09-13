@@ -11,6 +11,7 @@ enum class StringId : int {
     SetupThenClick1,
     SetupThenClick2,
     SetupImportButton,
+    SetupOrBuiltIn,
 
     InfoCreatedBy,
     InfoLicenseHeader,
@@ -18,6 +19,8 @@ enum class StringId : int {
     InfoTagline1,
     InfoTagline2,
     InfoClose,
+    ThemeInfoAuthorPrefix,
+    ThemeInfoNoDetails,
 
     ContributeHeader,
     ContributeShare,
@@ -28,6 +31,8 @@ enum class StringId : int {
     MenuLoadTheme,
     MenuImportClassic,
     MenuOpenFolder,
+    MenuAboutTheme,
+    MenuBuiltInSuffix,
     MenuLanguage,
     MenuLanguageAuto,
     MenuPitchBend,

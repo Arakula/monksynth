@@ -1,5 +1,6 @@
 #include "dll_extractor.h"
 #include "i18n.h"
+#include "theme_manager.h"
 #include "stb_image_write.h"
 
 #include <cstdio>
@@ -230,7 +231,16 @@ ExtractionResult extractClassicTheme(const fs::path &dllPath, const fs::path &co
         fs::path manifest = themeDir / "theme.json";
         FILE *mf = platform_fopen(manifest, "w");
         if (mf) {
-            fprintf(mf, "{\n  \"name\": \"Classic Delay Lama\",\n  \"version\": \"1.0\"\n}\n");
+            fprintf(mf,
+                    "{\n"
+                    "  \"name\": \"%s\",\n"
+                    "  \"author\": \"%s\",\n"
+                    "  \"version\": \"1.0\",\n"
+                    "  \"description\": \"%s\",\n"
+                    "  \"url\": \"%s\"\n"
+                    "}\n",
+                    ThemeManager::kClassicThemeName, ThemeManager::kClassicThemeAuthor,
+                    ThemeManager::kClassicThemeDescription, ThemeManager::kClassicThemeUrl);
             fclose(mf);
         }
     }

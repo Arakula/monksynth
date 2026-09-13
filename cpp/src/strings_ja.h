@@ -30,6 +30,8 @@ constexpr const char *kStringsJa[] = {
     "「Delay Lama.dll」を選択してください。",
     // SetupImportButton
     "クラシックテーマを読み込む...",
+    // SetupOrBuiltIn
+    "または内蔵テーマを使う：",
 
     // InfoCreatedBy
     "制作：Jonathan Taylor",
@@ -43,6 +45,10 @@ constexpr const char *kStringsJa[] = {
     "オープンソースで、ずっと無料です。",
     // InfoClose
     "閉じる",
+    // ThemeInfoAuthorPrefix
+    "作者：",
+    // ThemeInfoNoDetails
+    "追加情報はありません。",
 
     // ContributeHeader
     "オリジナルテーマを作ろう！",
@@ -61,6 +67,10 @@ constexpr const char *kStringsJa[] = {
     "DLL からクラシックテーマを読み込む...",
     // MenuOpenFolder
     "テーマフォルダを開く",
+    // MenuAboutTheme
+    "テーマについて...",
+    // MenuBuiltInSuffix
+    "（内蔵）",
     // MenuLanguage
     "言語",
     // MenuLanguageAuto

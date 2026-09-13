@@ -30,6 +30,8 @@ constexpr const char *kStringsKo[] = {
     "\"Delay Lama.dll\" 파일을 선택해 주세요.",
     // SetupImportButton
     "클래식 테마 가져오기...",
+    // SetupOrBuiltIn
+    "또는 내장 테마 사용: ",
 
     // InfoCreatedBy
     "만든 사람: Jonathan Taylor",
@@ -43,6 +45,10 @@ constexpr const char *kStringsKo[] = {
     "오픈 소스이고 영원히 무료예요.",
     // InfoClose
     "닫기",
+    // ThemeInfoAuthorPrefix
+    "제작: ",
+    // ThemeInfoNoDetails
+    "추가 정보가 없습니다.",
 
     // ContributeHeader
     "나만의 테마 만들기!",
@@ -61,6 +67,10 @@ constexpr const char *kStringsKo[] = {
     "DLL에서 클래식 테마 가져오기...",
     // MenuOpenFolder
     "테마 폴더 열기",
+    // MenuAboutTheme
+    "테마 정보...",
+    // MenuBuiltInSuffix
+    " (내장)",
     // MenuLanguage
     "언어",
     // MenuLanguageAuto
