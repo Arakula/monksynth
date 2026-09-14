@@ -523,14 +523,14 @@ jobs:
 
           ### Installation
 
-          - **macOS (Installer):** Run the `.pkg` installer — installs both VST3 and AU plugins
-          - **Windows (Installer):** Run the `.exe` installer — installs the VST3 plugin automatically
+          - **macOS (Installer):** Run the `.pkg` installer. It installs both the VST3 and AU plugins
+          - **Windows (Installer):** Run the `.exe` installer. It installs the VST3 plugin automatically
           - **macOS (Manual):** Extract VST3 to `~/Library/Audio/Plug-Ins/VST3/`, AU to `~/Library/Audio/Plug-Ins/Components/`
           - **Windows (Manual):** Extract and copy `MonkSynth.vst3` to `C:\Program Files\Common Files\VST3\`
           - **Linux (VST3):** Extract and copy to `~/.vst3/`
 
           ### Notes
-          - Windows build is signed by [SignPath Foundation](https://signpath.org). The certificate is newly issued, so SmartScreen may still show a warning until reputation builds — click **More info** → **Run anyway** if so
+          - Windows build is signed by [SignPath Foundation](https://signpath.org). The certificate is newly issued, so SmartScreen may still show a warning until reputation builds. Click **More info**, then **Run anyway** if so
           - macOS build is Universal (arm64 + x86_64), signed and notarized
           - Requires a DAW with VST3 support (or AU on macOS)
           EOF
@@ -538,8 +538,10 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: true
-          name: "MonkSynth ${{ github.ref_name }} (Beta)"
+          # A hyphen in the tag (v1.1.0-beta.1) marks a pre-release; plain
+          # vX.Y.Z tags publish as full releases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          name: "MonkSynth ${{ github.ref_name }}${{ contains(github.ref_name, '-') && ' (Beta)' || '' }}"
           body_path: release_notes.md
           files: |
             artifacts/MonkSynth-macOS-Setup/*.pkg

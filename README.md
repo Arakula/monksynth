@@ -6,7 +6,7 @@
 
 A monophonic vocal synthesizer that sounds like a monk chanting. Built using formant-wave-function (FOF) synthesis, inspired by the classic [Delay Lama](http://www.audionerdz.nl/) VST plugin by AudioNerdz (2002).
 
-**[Download the latest release](https://github.com/JonET/monksynth/releases)** — available for Windows, macOS, and Linux.
+**[Download the latest release](https://github.com/JonET/monksynth/releases)** for Windows, macOS, and Linux.
 
 <img src="docs/screenshot1.png" alt="MonkSynth running in Ableton Live 12 with the classic Delay Lama theme" width="600">
 
@@ -67,7 +67,7 @@ CI runs the test suite on the Linux job before packaging each release, so any DS
 
 ## Installation
 
-- **macOS:** Run the `.pkg` installer — installs both VST3 and AU plugins
+- **macOS:** Run the `.pkg` installer. It installs both the VST3 and AU plugins
 - **Windows:** Run the `.exe` installer — installs the VST3 plugin
 - **Linux:** Extract and copy `MonkSynth.vst3` to `~/.vst3/`
 

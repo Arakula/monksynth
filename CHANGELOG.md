@@ -2,7 +2,9 @@
 
 All notable changes to MonkSynth will be documented in this file.
 
-## [Unreleased]
+## [1.0.0] - 2026-09-13
+
+First stable release. The beta line has been in use since April; this drops the beta tag and gathers everything since 0.2.0-beta.15 below.
 
 ### Added
 - Right-click menu now lists every theme installed in the user themes folder under "Theme: <current>", so switching themes no longer requires the file chooser. "Load Theme..." is still there for themes elsewhere on disk.
