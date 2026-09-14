@@ -108,7 +108,7 @@ static std::vector<uint8_t> dib_to_rgba(const uint8_t *dib, int width, int heigh
     int rawH = (int)(dib[8] | (dib[9] << 8) | (dib[10] << 16) | (dib[11] << 24));
     bool bottomUp = (rawH > 0);
 
-    std::vector<uint8_t> rgba(width * height * 4);
+    std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4);
 
     for (int y = 0; y < height; y++) {
         int srcRow = bottomUp ? (height - 1 - y) : y;
