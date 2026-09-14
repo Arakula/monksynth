@@ -46,6 +46,7 @@ enum class StringId : int {
     FileExtDll,
 
     ErrCannotOpen,
+    ErrCannotOpenHint,
     ErrUnexpectedSize,
     ErrReadFailed,
     ErrChecksumMismatch,

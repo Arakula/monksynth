@@ -3,6 +3,7 @@
 #include "theme_manager.h"
 
 #include "vstgui/lib/cviewcontainer.h"
+#include "vstgui/lib/dragging.h"
 
 #include <filesystem>
 #include <functional>
@@ -27,6 +28,11 @@ class SetupView : public VSTGUI::CViewContainer {
     void setBuiltInThemes(std::vector<ThemeManager::InstalledTheme> themes);
     void setBuiltInThemeCallback(ThemeCallback cb) { builtInCb_ = std::move(cb); }
 
+    // Called with the path of a .dll dragged and dropped onto the view.
+    void setDllDropCallback(ThemeCallback cb) { dllDropCb_ = std::move(cb); }
+    VSTGUI::SharedPointer<VSTGUI::IDropTarget> getDropTarget() override;
+    void setDragHover(bool hover);
+
     void setStatusText(const std::string &text);
 
     void drawBackgroundRect(VSTGUI::CDrawContext *ctx, const VSTGUI::CRect &rect) override;
@@ -46,6 +52,8 @@ class SetupView : public VSTGUI::CViewContainer {
     std::vector<ThemeManager::InstalledTheme> builtInThemes_;
     ImportCallback importCb_;
     ThemeCallback builtInCb_;
+    ThemeCallback dllDropCb_;
+    bool dragHover_ = false;
 };
 
 } // namespace MonkSynth

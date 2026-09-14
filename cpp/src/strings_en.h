@@ -18,9 +18,9 @@ constexpr const char *kStringsEn[] = {
     // SetupDownloadFrom
     "Download it for free from:",
     // SetupThenClick1
-    "Then click below and select the",
+    "Then drop the \"Delay Lama.dll\" file here,",
     // SetupThenClick2
-    "\"Delay Lama.dll\" file.",
+    "or click below and select it.",
     // SetupImportButton
     "Import Classic Theme...",
     // SetupOrBuiltIn
@@ -88,7 +88,9 @@ constexpr const char *kStringsEn[] = {
     "DLL Files",
 
     // ErrCannotOpen
-    "Could not open the selected file.",
+    "Could not open the selected file",
+    // ErrCannotOpenHint
+    "Copy the DLL into the themes folder and click Import again.",
     // ErrUnexpectedSize
     "This doesn't appear to be the original Delay Lama DLL "
     "(unexpected file size).",

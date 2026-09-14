@@ -25,9 +25,9 @@ constexpr const char *kStringsKo[] = {
     // SetupDownloadFrom
     "아래에서 무료로 다운로드:",
     // SetupThenClick1
-    "아래 버튼을 눌러서",
+    "\"Delay Lama.dll\" 파일을 여기에 끌어다 놓거나",
     // SetupThenClick2
-    "\"Delay Lama.dll\" 파일을 선택해 주세요.",
+    "아래 버튼을 눌러 선택해 주세요.",
     // SetupImportButton
     "클래식 테마 가져오기...",
     // SetupOrBuiltIn
@@ -95,7 +95,9 @@ constexpr const char *kStringsKo[] = {
     "DLL 파일",
 
     // ErrCannotOpen
-    "선택한 파일을 열 수 없습니다.",
+    "선택한 파일을 열 수 없습니다",
+    // ErrCannotOpenHint
+    "DLL을 테마 폴더에 복사한 뒤 다시 가져오기를 누르세요.",
     // ErrUnexpectedSize
     "원본 Delay Lama DLL이 아닌 것 같습니다 "
     "(파일 크기가 예상과 다릅니다).",

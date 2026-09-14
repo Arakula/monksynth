@@ -22,7 +22,9 @@
 #include "vstgui/uidescription/uidescription.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 
 using namespace Steinberg;
@@ -31,6 +33,44 @@ using namespace VSTGUI;
 namespace fs = std::filesystem;
 
 namespace MonkSynth {
+
+Controller::DllKey Controller::DllKey::of(const fs::path &p) {
+    std::error_code ec;
+    DllKey k;
+    k.path = p;
+    k.size = fs::file_size(p, ec);
+    if (ec)
+        k.size = 0;
+    k.mtime = fs::last_write_time(p, ec);
+    if (ec)
+        k.mtime = {};
+    return k;
+}
+
+// A file that already failed to import is skipped until it changes, so the
+// Import button falls through to the file picker and the folder watch
+// doesn't retry it every second.
+std::optional<fs::path> Controller::findFolderDll() const {
+    std::error_code ec;
+    for (const fs::path &dir : {ThemeManager::getThemesDir(), ThemeManager::getConfigDir()}) {
+        fs::directory_iterator it(dir, ec);
+        if (ec)
+            continue;
+        for (const auto &entry : it) {
+            if (!entry.is_regular_file(ec) || ec)
+                continue;
+            std::string ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            if (ext != ".dll")
+                continue;
+            if (failedDll_ && *failedDll_ == DllKey::of(entry.path()))
+                continue;
+            return entry.path();
+        }
+    }
+    return std::nullopt;
+}
 
 // VSTGUI file selectors return UTF-8 strings.  On Windows, the fs::path(const
 // char*) constructor interprets narrow strings using the active ANSI code page,
@@ -109,6 +149,35 @@ void Controller::didOpen(VST3Editor *editor) {
     // Info button callback is set in createCustomView using currentEditor_
 }
 
+void Controller::importClassicFromDll(ThemedVST3Editor *editor, SetupView *setup,
+                                      const fs::path &dllPath) {
+    if (editor != currentEditor_)
+        return;
+    try {
+        auto result = extractClassicTheme(dllPath, ThemeManager::getConfigDir());
+        if (result.success) {
+            // Defer UI recreation: we may be inside a file selector callback
+            // or a click handler, and recreating views there breaks event
+            // handling on Linux.
+            stopSetupDllWatch(); // the setup screen is about to be replaced
+            auto themeDir = result.themeDir;
+            Call::later([this, editor, themeDir]() { switchTheme(editor, themeDir, false); });
+        } else {
+            failedDll_ = DllKey::of(dllPath);
+            if (setup)
+                setup->setStatusText(result.error);
+        }
+    } catch (const std::exception &e) {
+        failedDll_ = DllKey::of(dllPath);
+        if (setup)
+            setup->setStatusText(std::string("Error: ") + e.what());
+    } catch (...) {
+        failedDll_ = DllKey::of(dllPath);
+        if (setup)
+            setup->setStatusText("An unexpected error occurred.");
+    }
+}
+
 void Controller::showSetupOverlay(VST3Editor *editor) {
     auto *frame = editor->getFrame();
     if (!frame)
@@ -130,7 +199,22 @@ void Controller::showSetupOverlay(VST3Editor *editor) {
             [this, themedEditor, themeDir]() { switchTheme(themedEditor, themeDir, true); });
     });
 
+    // Called from inside the OS drop callback: defer the extraction (a few
+    // MB of synchronous work) so the drag animation can finish first. The
+    // callback lives in the view, so it holds only a raw pointer to it; the
+    // deferred closure retains the view.
+    setup->setDllDropCallback([this, setup, themedEditor](const fs::path &dllPath) {
+        Call::later([this, setup = SharedPointer<SetupView>(setup), themedEditor, dllPath]() {
+            importClassicFromDll(themedEditor, setup, dllPath);
+        });
+    });
+
     setup->setImportCallback([this, frame, setup, themedEditor]() {
+        if (auto dll = findFolderDll()) {
+            importClassicFromDll(themedEditor, setup, *dll);
+            return;
+        }
+
         auto *selector = CNewFileSelector::create(frame, CNewFileSelector::kSelectFile);
         if (!selector)
             return;
@@ -140,35 +224,49 @@ void Controller::showSetupOverlay(VST3Editor *editor) {
             CFileExtension(i18n::str(i18n::StringId::FileExtDll), "dll"));
 
         selector->run([this, setup, themedEditor](CNewFileSelector *sel) {
-            try {
-                if (sel->getNumSelectedFiles() == 0)
-                    return;
-
-                auto dllPath = pathFromUTF8(sel->getSelectedFile(0));
-                auto configDir = themeManager_.getClassicThemeDir().parent_path().parent_path();
-                auto result = extractClassicTheme(dllPath, configDir);
-
-                if (result.success) {
-                    // Defer UI recreation until after the file selector callback
-                    // returns — recreating views inside the callback causes
-                    // broken event handling on Linux.
-                    auto themeDir = result.themeDir;
-                    Call::later([this, themedEditor, themeDir]() {
-                        switchTheme(themedEditor, themeDir, false);
-                    });
-                } else {
-                    setup->setStatusText(result.error);
-                }
-            } catch (const std::exception &e) {
-                setup->setStatusText(std::string("Error: ") + e.what());
-            } catch (...) {
-                setup->setStatusText("An unexpected error occurred.");
-            }
+            if (sel->getNumSelectedFiles() == 0)
+                return;
+            importClassicFromDll(themedEditor, setup, pathFromUTF8(sel->getSelectedFile(0)));
         });
         selector->forget();
     });
 
     frame->addView(setup);
+
+    // Import a DLL from the folder without another click: immediately if
+    // one is already there (the user followed the copy-it-there instruction
+    // before reopening the plugin), or as soon as one appears while the
+    // setup screen is up. A successful import stops the watch (the screen
+    // is replaced). A failed one shows its error and the file is skipped
+    // until it changes, so the watch keeps running for a corrected copy.
+    // The closure retains the view: a late run after the frame is gone at
+    // most sets text on a detached view.
+    auto folderImport = [this, setup = SharedPointer<SetupView>(setup), themedEditor]() {
+        if (!setupDllWatch_)
+            return; // setup screen gone, or an import already succeeded
+        if (auto dll = findFolderDll())
+            importClassicFromDll(themedEditor, setup, *dll);
+    };
+    // A file the watch sees may still be mid-copy: import only once it has
+    // the same size and mtime on two consecutive ticks. The import runs
+    // deferred rather than inside the timer callback.
+    setupDllWatch_ = VSTGUI::makeOwned<VSTGUI::CVSTGUITimer>(
+        [this, folderImport, seen = std::optional<DllKey>{}](VSTGUI::CVSTGUITimer *) mutable {
+            auto dll = findFolderDll();
+            if (!dll) {
+                seen.reset();
+                return;
+            }
+            auto key = DllKey::of(*dll);
+            if (seen && *seen == key) {
+                seen.reset();
+                Call::later(folderImport);
+            } else {
+                seen = key;
+            }
+        },
+        1000);
+    Call::later(folderImport);
 }
 
 void Controller::presentOverlay(VST3Editor *editor, OverlayView *view) {
@@ -197,7 +295,15 @@ void Controller::showThemeInfoOverlay(VST3Editor *editor) {
     presentOverlay(editor, new ThemeInfoView(CRect(0, 0, 360, 510), themeManager_.getThemeInfo()));
 }
 
+void Controller::stopSetupDllWatch() {
+    if (setupDllWatch_) {
+        setupDllWatch_->stop();
+        setupDllWatch_ = nullptr;
+    }
+}
+
 void Controller::willClose(VST3Editor * /*editor*/) {
+    stopSetupDllWatch();
     monkView_ = nullptr;
     infoButton_ = nullptr;
     currentEditor_ = nullptr;
@@ -241,6 +347,7 @@ void Controller::switchTheme(ThemedVST3Editor *editor, const std::filesystem::pa
     if (editor != currentEditor_)
         return;
     overlay_ = nullptr; // recreateUI destroys it
+    stopSetupDllWatch(); // and the setup screen with it
     auto *desc = editor->getUIDescription();
     if (desc)
         desc->freePlatformResources();
@@ -372,6 +479,11 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
         new CCommandMenuItem(CCommandMenuItem::Desc(i18n::str(i18n::StringId::MenuImportClassic)));
     importItem->setActions([this, themedEditor](CCommandMenuItem *) {
         Call::later([this, themedEditor]() {
+            if (auto dll = findFolderDll()) {
+                importClassicFromDll(themedEditor, nullptr, *dll);
+                return;
+            }
+
             auto *frame = themedEditor->getFrame();
             if (!frame)
                 return;
@@ -385,18 +497,9 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
                 CFileExtension(i18n::str(i18n::StringId::FileExtDll), "dll"));
 
             selector->run([this, themedEditor](CNewFileSelector *sel) {
-                try {
-                    if (sel->getNumSelectedFiles() == 0)
-                        return;
-
-                    auto dllPath = pathFromUTF8(sel->getSelectedFile(0));
-                    auto configDir = themeManager_.getClassicThemeDir().parent_path().parent_path();
-                    auto result = extractClassicTheme(dllPath, configDir);
-
-                    if (result.success)
-                        switchTheme(themedEditor, result.themeDir, false);
-                } catch (...) {
-                }
+                if (sel->getNumSelectedFiles() == 0)
+                    return;
+                importClassicFromDll(themedEditor, nullptr, pathFromUTF8(sel->getSelectedFile(0)));
             });
             selector->forget();
         });

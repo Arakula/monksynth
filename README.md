@@ -96,6 +96,10 @@ Most hosts pick them up on the next plug-in rescan.
 
 On first launch, MonkSynth shows a setup screen where you can import the classic look from the original Delay Lama DLL (available as freeware from [audionerdz.nl](http://www.audionerdz.nl/download.htm)). That's the recommended path. The setup screen also offers the built-in "Smiley Face..." theme by gav as a one-click alternative if you'd rather not hunt down the DLL.
 
+You can also drag `Delay Lama.dll` straight onto the setup screen.
+
+**Logic Pro and GarageBand users:** macOS won't let the AU read files you pick or drop from Downloads, Desktop or Documents ("Operation not permitted"). Click "Open themes folder" on the setup screen and copy `Delay Lama.dll` into that folder; it's imported automatically as soon as it lands there.
+
 Right-click the plugin GUI to switch between installed themes, load a theme from anywhere on disk, or open the themes folder. Themes live in a per-user folder:
 
 - macOS: `~/Library/Application Support/MonkSynth/themes/`

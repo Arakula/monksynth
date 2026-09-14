@@ -10,12 +10,17 @@
 #include "vstgui/plugin-bindings/vst3editor.h"
 #include "vstgui/uidescription/uidescription.h"
 
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+
 namespace MonkSynth {
 
 class Controller;
 class InfoButton;
 class MonkView;
 class OverlayView;
+class SetupView;
 
 // Subclass that applies theme bitmaps before views are created, so that
 // controls like CAnimKnob see the real bitmap dimensions at init time.
@@ -116,6 +121,10 @@ class Controller : public Steinberg::Vst::EditController,
     // Adds a modal overlay to the editor's frame unless one is already open.
     void presentOverlay(VST3Editor *editor, OverlayView *view);
     void showSetupOverlay(VST3Editor *editor);
+    // Extracts the classic theme from |dllPath| and switches to it; errors
+    // are shown on |setup| when given.
+    void importClassicFromDll(ThemedVST3Editor *editor, SetupView *setup,
+                              const std::filesystem::path &dllPath);
     void showInfoOverlay(VST3Editor *editor);
     void showThemeInfoOverlay(VST3Editor *editor);
 
@@ -139,6 +148,25 @@ class Controller : public Steinberg::Vst::EditController,
     bool inSetParam_ = false; // re-entrancy guard for setParamNormalized
 
     VSTGUI::SharedPointer<VSTGUI::CVSTGUITimer> pitchBendSpringTimer_;
+    // While the setup screen is showing, polls the themes folder so a DLL
+    // dropped in is imported without another click. Non-null exactly while
+    // the setup screen is up on currentEditor_.
+    VSTGUI::SharedPointer<VSTGUI::CVSTGUITimer> setupDllWatch_;
+    void stopSetupDllWatch();
+    // Identity of a DLL file on disk; a changed size or mtime is a new file.
+    struct DllKey {
+        std::filesystem::path path;
+        std::uintmax_t size = 0;
+        std::filesystem::file_time_type mtime;
+        static DllKey of(const std::filesystem::path &p);
+        bool operator==(const DllKey &o) const {
+            return path == o.path && size == o.size && mtime == o.mtime;
+        }
+    };
+    // The last DLL that failed to import; findFolderDll() skips it.
+    std::optional<DllKey> failedDll_;
+    // First *.dll in the themes or config folder, if any.
+    std::optional<std::filesystem::path> findFolderDll() const;
     PbSpring pbSpringState_ = PbSpring::Idle;
     double pbSpringStart_ = 0.5;
     double pbSpringElapsedMs_ = 0.0;

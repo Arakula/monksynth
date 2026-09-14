@@ -3,6 +3,7 @@
 #include "theme_manager.h"
 #include "stb_image_write.h"
 
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -166,8 +167,17 @@ static void apply_transparency(std::vector<uint8_t> &rgba, int w, int h, TranspM
 ExtractionResult extractClassicTheme(const fs::path &dllPath, const fs::path &configDir) {
     // Read entire DLL
     FILE *f = platform_fopen(dllPath, "rb");
-    if (!f)
-        return {false, i18n::str(i18n::StringId::ErrCannotOpen), {}};
+    if (!f) {
+        // Include the OS reason: "Operation not permitted" points at macOS
+        // folder privacy (TCC) blocking the AU host process, which is the
+        // usual cause in Logic/GarageBand for files in Downloads (#27).
+        int err = errno;
+        std::string msg = std::string(i18n::str(i18n::StringId::ErrCannotOpen)) + " (" +
+                          std::strerror(err) + ").";
+        if (err == EPERM || err == EACCES)
+            msg += std::string("\n") + i18n::str(i18n::StringId::ErrCannotOpenHint);
+        return {false, msg, {}};
+    }
 
     fseek(f, 0, SEEK_END);
     size_t fileSize = ftell(f);

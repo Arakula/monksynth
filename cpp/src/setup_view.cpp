@@ -1,6 +1,7 @@
 #include "setup_view.h"
 #include "i18n.h"
 #include "draw_utils.h"
+#include "vstgui/lib/idatapackage.h"
 #include "open_url.h"
 #include "theme_manager.h"
 #include "version.h"
@@ -10,6 +11,10 @@
 #include "vstgui/lib/cframe.h"
 #include "vstgui/lib/cgraphicspath.h"
 #include "vstgui/lib/cstring.h"
+
+#include <algorithm>
+#include <cctype>
+#include <optional>
 
 using namespace VSTGUI;
 
@@ -23,6 +28,71 @@ SetupView::SetupView(const CRect &size) : CViewContainer(size) {
     double bx = (size.getWidth() - bw) / 2;
     double by = 308;
     importBtnRect_ = CRect(bx, by, bx + bw, by + bh);
+}
+
+// First .dll file path in a drag's data package, if any.
+static std::optional<std::filesystem::path> dllInPackage(IDataPackage *pkg) {
+    if (!pkg)
+        return std::nullopt;
+    for (uint32_t i = 0; i < pkg->getCount(); i++) {
+        if (pkg->getDataType(i) != IDataPackage::kFilePath)
+            continue;
+        const void *buf = nullptr;
+        IDataPackage::Type type;
+        uint32_t size = pkg->getData(i, buf, type);
+        if (!buf || size == 0)
+            continue;
+        std::string s(static_cast<const char *>(buf), size);
+        while (!s.empty() && s.back() == '\0')
+            s.pop_back();
+        std::filesystem::path p = std::filesystem::u8path(s);
+        std::string ext = p.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (ext == ".dll")
+            return p;
+    }
+    return std::nullopt;
+}
+
+// Accepts a dropped Delay Lama DLL. Owned by VSTGUI for the duration of a
+// drag; holds the view alive alongside.
+class SetupDropTarget : public DropTargetAdapter, public NonAtomicReferenceCounted {
+  public:
+    SetupDropTarget(SetupView *view, std::function<void(const std::filesystem::path &)> cb)
+        : view_(view), cb_(std::move(cb)) {}
+
+    DragOperation onDragEnter(DragEventData data) override { return onDragMove(data); }
+    DragOperation onDragMove(DragEventData data) override {
+        bool ok = dllInPackage(data.drag).has_value();
+        view_->setDragHover(ok);
+        return ok ? DragOperation::Copy : DragOperation::None;
+    }
+    void onDragLeave(DragEventData) override { view_->setDragHover(false); }
+    bool onDrop(DragEventData data) override {
+        view_->setDragHover(false);
+        auto dll = dllInPackage(data.drag);
+        if (!dll)
+            return false;
+        if (cb_)
+            cb_(*dll);
+        return true;
+    }
+
+  private:
+    SharedPointer<SetupView> view_;
+    std::function<void(const std::filesystem::path &)> cb_;
+};
+
+SharedPointer<IDropTarget> SetupView::getDropTarget() {
+    return makeOwned<SetupDropTarget>(this, dllDropCb_);
+}
+
+void SetupView::setDragHover(bool hover) {
+    if (dragHover_ == hover)
+        return;
+    dragHover_ = hover;
+    setDirty(true);
 }
 
 void SetupView::setBuiltInThemes(std::vector<ThemeManager::InstalledTheme> themes) {
@@ -69,6 +139,16 @@ void SetupView::drawBackgroundRect(CDrawContext *ctx, const CRect & /*rect*/) {
     CRect accent(bounds.left + 30, bounds.top + 40, bounds.right - 30, bounds.top + 42);
     ctx->setFillColor(CColor(200, 150, 50, 255));
     ctx->drawRect(accent, kDrawFilled);
+
+    // Drop highlight while a DLL is dragged over the view
+    if (dragHover_) {
+        CRect border(bounds);
+        border.inset(3, 3);
+        ctx->setFrameColor(CColor(200, 150, 50, 255));
+        ctx->setLineWidth(3);
+        ctx->drawRect(border, kDrawStroked);
+        ctx->setLineWidth(1);
+    }
 
     auto *titleFont = new CFontDesc(font, 24, kBoldFace);
     auto *bodyFont = new CFontDesc(font, 13);
@@ -140,13 +220,26 @@ void SetupView::drawBackgroundRect(CDrawContext *ctx, const CRect & /*rect*/) {
     ctx->setFontColor(CColor(30, 30, 35, 255));
     ctx->drawString(i18n::str(i18n::StringId::SetupImportButton), btn, kCenterText);
 
-    // Status text (single line; squeezed into the gap above the contribute
-    // section so the two don't overlap).
+    // Status text: up to two lines split on '\n' (message + hint), squeezed
+    // into the gap between the button and the built-in theme link.
     if (!statusText_.empty()) {
         ctx->setFont(smallFont);
         ctx->setFontColor(CColor(220, 180, 100, 255));
-        CRect statusRect(bounds.left + 20, btn.bottom + 5, bounds.right - 20, btn.bottom + 20);
-        ctx->drawString(statusText_.c_str(), statusRect, kCenterText);
+        double sy = btn.bottom + 4;
+        size_t start = 0;
+        for (int line = 0; line < 2 && start <= statusText_.size(); line++) {
+            size_t nl = statusText_.find('\n', start);
+            std::string text = statusText_.substr(start, nl == std::string::npos ? std::string::npos
+                                                                                  : nl - start);
+            CRect statusRect(bounds.left + 20, sy, bounds.right - 20, sy + 13);
+            // OS error text and the ja/ko strings can exceed the width.
+            text = ellipsize(ctx, text, statusRect.getWidth());
+            ctx->drawString(text.c_str(), statusRect, kCenterText);
+            sy += 13;
+            if (nl == std::string::npos)
+                break;
+            start = nl + 1;
+        }
     }
 
     // Built-in theme shortcut: "Or use the built-in theme: <name>" on one
