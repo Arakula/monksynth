@@ -159,12 +159,53 @@ static void test_rate_setter_clamps(void) {
     free(d);
 }
 
+
+/* At some rate/sample-rate pairs the read position is a tiny negative that
+ * rounds to exactly 96000.0 once the line size is added, one past the end
+ * of the buffer. The index is now split from the fraction before wrapping. */
+static void test_read_index_never_wraps_past_end(void) {
+    MonkDelay *d = calloc(1, sizeof *d);
+    assert(d);
+    monk_delay_init(d, SR);
+    monk_delay_set_rate(d, 0.0000270f);
+    monk_delay_set_sample_rate(d, SR);
+    static float in[1024], l[1024], r[1024];
+    in[0] = 1.0f;
+    for (int b = 0; b < MONK_DELAY_LINE_SIZE / 1024 + 2; b++) {
+        monk_delay_process(d, in, l, r, 1024);
+        for (int i = 0; i < 1024; i++)
+            assert(isfinite(l[i]) && isfinite(r[i]));
+    }
+    free(d);
+}
+
+/* NaN used to pass the rate and mix range checks and poison the read
+ * position permanently; sample rate 0 made the smoothing coefficient inf. */
+static void test_non_finite_inputs_are_clamped(void) {
+    MonkDelay *d = calloc(1, sizeof *d);
+    assert(d);
+    monk_delay_init(d, 0.0f);
+    assert(isfinite(d->smooth_coeff));
+    monk_delay_set_rate(d, NAN);
+    monk_delay_set_mix(d, NAN);
+    assert(d->rate == 0.0f && d->mix == 0.0f);
+    assert(isfinite(d->target_delay_l) && isfinite(d->target_delay_r));
+    static float in[256], l[256], r[256];
+    in[0] = 1.0f;
+    monk_delay_process(d, in, l, r, 256);
+    for (int i = 0; i < 256; i++)
+        assert(isfinite(l[i]) && isfinite(r[i]));
+    free(d);
+}
+
 int main(void) {
     test_silence_in_silence_out();
     test_dry_passthrough_when_mix_is_zero();
     test_impulse_appears_at_tap_time();
     test_feedback_stability();
     test_rate_setter_clamps();
+    test_read_index_never_wraps_past_end();
+    test_non_finite_inputs_are_clamped();
 
     printf("test_delay: all tests passed\n");
     return 0;

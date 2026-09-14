@@ -45,6 +45,7 @@ static float gain_smoothing_coeff(float sample_rate) {
 }
 
 MonkSynthEngine *monk_synth_new(float sample_rate) {
+    sample_rate = monk_sanitize_sample_rate(sample_rate);
     MonkSynthEngine *s = calloc(1, sizeof(MonkSynthEngine));
     if (!s)
         return NULL;
@@ -80,9 +81,10 @@ MonkSynthEngine *monk_synth_new(float sample_rate) {
 void monk_synth_free(MonkSynthEngine *s) { free(s); }
 
 void monk_synth_set_sample_rate(MonkSynthEngine *s, float sample_rate) {
-    s->gain_coeff = gain_smoothing_coeff(sample_rate);
     if (!s)
         return;
+    sample_rate = monk_sanitize_sample_rate(sample_rate);
+    s->gain_coeff = gain_smoothing_coeff(sample_rate);
     for (int i = 0; i < MAX_UNISON; i++)
         monk_voice_set_sample_rate(&s->voices[i], sample_rate);
     monk_delay_set_sample_rate(&s->delay, sample_rate);
@@ -96,11 +98,16 @@ void monk_synth_reset(MonkSynthEngine *s) {
     monk_delay_reset(&s->delay);
     s->held_count = 0;
     s->cc_volume = 0.1f;
+    /* Re-arm the gain smoothers too, so a non-finite value can't persist
+     * across a reset (the -1 sentinel makes the next process() snap). */
+    s->current_voice_gain = s->target_voice_gain;
+    s->current_out_gain = -1.0f;
 }
 
 /* ---- Helpers ---- */
 
-static float clamp01(float v) { return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; }
+/* NaN-safe: NaN fails both comparisons and maps to 0. */
+static float clamp01(float v) { return v > 0.0f ? (v < 1.0f ? v : 1.0f) : 0.0f; }
 
 /* Apply voice character spread across unison voices. Each voice gets a
  * symmetric offset from the base voice value, clamped to 0-1. */
@@ -335,11 +342,11 @@ void monk_synth_set_delay_rate(MonkSynthEngine *s, float v) {
 }
 void monk_synth_set_volume(MonkSynthEngine *s, float v) {
     if (s)
-        s->cc_volume = v;
+        s->cc_volume = clamp01(v);
 }
 void monk_synth_set_level(MonkSynthEngine *s, float v) {
     if (s)
-        s->level = v;
+        s->level = clamp01(v);
 }
 
 /* ---- MIDI routing ---- */

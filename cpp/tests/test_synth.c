@@ -228,6 +228,94 @@ static void test_unison_gain_ramp_is_time_based(void) {
     monk_synth_free(s);
 }
 
+
+static int all_finite(const float *b, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++)
+        if (!isfinite(b[i]))
+            return 0;
+    return 1;
+}
+
+/* 384 kHz used to size the grain at 7680 samples and write past the
+ * 3840-entry window, decay and aspiration tables into the next voice. */
+static void test_high_sample_rate_clamps_grain(void) {
+    MonkSynthEngine *s = monk_synth_new(384000.0f);
+    assert(s);
+    for (int i = 0; i < MONK_MAX_UNISON; i++)
+        assert(s->voices[i].grain_len == MONK_MAX_GRAIN);
+    monk_synth_set_unison(s, 10);
+    monk_synth_note_on(s, 60, 1.0f);
+    static float l[MONK_MAX_BUF], r[MONK_MAX_BUF];
+    for (int b = 0; b < 8; b++)
+        monk_synth_process(s, l, r, MONK_MAX_BUF);
+    assert(all_finite(l, MONK_MAX_BUF) && all_finite(r, MONK_MAX_BUF));
+    monk_synth_set_sample_rate(s, 192000.0f);
+    assert(s->voices[0].grain_len == MONK_MAX_GRAIN);
+    monk_synth_free(s);
+}
+
+/* A sample rate of 0 made the vibrato phase advance by inf and the wrap
+ * loop spin forever; NaN and out-of-range rates fall back to 44.1 kHz. */
+static void test_bad_sample_rate_falls_back(void) {
+    MonkSynthEngine *s = monk_synth_new(0.0f);
+    assert(s);
+    assert(float_near(s->voices[0].sample_rate, 44100.0f, 0.0f));
+    monk_synth_set_sample_rate(s, NAN);
+    assert(float_near(s->voices[0].sample_rate, 44100.0f, 0.0f));
+    monk_synth_note_on(s, 60, 1.0f);
+    static float l[1024], r[1024];
+    monk_synth_process(s, l, r, 1024);
+    assert(all_finite(l, 1024) && all_finite(r, 1024));
+    monk_synth_free(s);
+}
+
+/* NaN and out-of-range parameter values must never reach a table index:
+ * a NaN vowel or delay rate cast to INT_MIN on x86 and read 8 GiB below
+ * the table. They are clamped at the setter instead. */
+static void test_non_finite_parameters_are_clamped(void) {
+    MonkSynthEngine *s = monk_synth_new(SR);
+    assert(s);
+    monk_synth_set_vowel(s, NAN);
+    monk_synth_set_voice(s, NAN);
+    monk_synth_set_delay_rate(s, NAN);
+    monk_synth_set_delay_mix(s, INFINITY);
+    monk_synth_set_vibrato(s, NAN);
+    monk_synth_set_vibrato_rate(s, -INFINITY);
+    monk_synth_set_aspiration(s, NAN);
+    monk_synth_set_pitch_bend(s, NAN);
+    monk_synth_set_glide(s, 1e9f);
+    monk_synth_set_volume(s, NAN);
+    monk_synth_set_level(s, INFINITY);
+    monk_synth_set_pitch_hz(s, 0.0f);
+    monk_synth_set_pitch_hz(s, -5.0f);
+    monk_synth_set_pitch_hz(s, NAN);
+    assert(s->voices[0].glide_param <= 1.0f);
+    assert(isfinite(s->voices[0].target_pitch));
+    assert(s->cc_volume == 0.0f && s->level == 1.0f);
+    monk_synth_note_on(s, 60, 1.0f);
+    static float l[MONK_MAX_BUF], r[MONK_MAX_BUF];
+    for (int b = 0; b < 4; b++)
+        monk_synth_process(s, l, r, MONK_MAX_BUF);
+    assert(all_finite(l, MONK_MAX_BUF) && all_finite(r, MONK_MAX_BUF));
+    monk_synth_free(s);
+}
+
+/* reset() re-arms the gain smoothers so nothing non-finite can linger. */
+static void test_reset_rearms_gain_smoothing(void) {
+    MonkSynthEngine *s = monk_synth_new(SR);
+    assert(s);
+    s->current_out_gain = NAN;
+    s->current_voice_gain = NAN;
+    monk_synth_reset(s);
+    assert(s->current_out_gain < 0.0f);
+    assert(isfinite(s->current_voice_gain));
+    monk_synth_note_on(s, 60, 1.0f);
+    static float l[1024], r[1024];
+    monk_synth_process(s, l, r, 1024);
+    assert(all_finite(l, 1024) && all_finite(r, 1024));
+    monk_synth_free(s);
+}
+
 int main(void) {
     test_note_stack_lifo();
     test_note_stack_overflow();
@@ -238,6 +326,10 @@ int main(void) {
     test_process_split_equals_whole();
     test_process_block_larger_than_scratch();
     test_unison_gain_ramp_is_time_based();
+    test_high_sample_rate_clamps_grain();
+    test_bad_sample_rate_falls_back();
+    test_non_finite_parameters_are_clamped();
+    test_reset_rearms_gain_smoothing();
 
     printf("test_synth: all tests passed\n");
     return 0;

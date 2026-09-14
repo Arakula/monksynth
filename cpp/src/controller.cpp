@@ -153,15 +153,16 @@ void Controller::importClassicFromDll(ThemedVST3Editor *editor, SetupView *setup
                                       const fs::path &dllPath) {
     if (editor != currentEditor_)
         return;
+    // A file panel or deferred call can outlive the setup screen it was
+    // started from (close and reopen the editor while the panel is up).
+    // Callers hold the view, so it is valid memory; just don't draw on it.
+    if (setup && !setup->isAttached())
+        setup = nullptr;
     try {
         auto result = extractClassicTheme(dllPath, ThemeManager::getConfigDir());
         if (result.success) {
-            // Defer UI recreation: we may be inside a file selector callback
-            // or a click handler, and recreating views there breaks event
-            // handling on Linux.
             stopSetupDllWatch(); // the setup screen is about to be replaced
-            auto themeDir = result.themeDir;
-            Call::later([this, editor, themeDir]() { switchTheme(editor, themeDir, false); });
+            selectTheme(result.themeDir, false);
         } else {
             failedDll_ = DllKey::of(dllPath);
             if (setup)
@@ -192,19 +193,15 @@ void Controller::showSetupOverlay(VST3Editor *editor) {
         if (t.bundled)
             bundled.push_back(t);
     setup->setBuiltInThemes(std::move(bundled));
-    setup->setBuiltInThemeCallback([this, themedEditor](const fs::path &themeDir) {
-        // Same deferral as the import path: don't rebuild views from inside
-        // the click handler of a view that's about to be destroyed.
-        Call::later(
-            [this, themedEditor, themeDir]() { switchTheme(themedEditor, themeDir, true); });
-    });
+    setup->setBuiltInThemeCallback(
+        [this](const fs::path &themeDir) { selectTheme(themeDir, true); });
 
     // Called from inside the OS drop callback: defer the extraction (a few
     // MB of synchronous work) so the drag animation can finish first. The
     // callback lives in the view, so it holds only a raw pointer to it; the
     // deferred closure retains the view.
     setup->setDllDropCallback([this, setup, themedEditor](const fs::path &dllPath) {
-        Call::later([this, setup = SharedPointer<SetupView>(setup), themedEditor, dllPath]() {
+        deferUI([this, setup = SharedPointer<SetupView>(setup), themedEditor, dllPath]() {
             importClassicFromDll(themedEditor, setup, dllPath);
         });
     });
@@ -223,7 +220,11 @@ void Controller::showSetupOverlay(VST3Editor *editor) {
         selector->addFileExtension(
             CFileExtension(i18n::str(i18n::StringId::FileExtDll), "dll"));
 
-        selector->run([this, setup, themedEditor](CNewFileSelector *sel) {
+        // The panel is asynchronous on macOS: hold the view so the status
+        // text target is at least valid memory if the editor was closed and
+        // reopened meanwhile (importClassicFromDll checks isAttached).
+        selector->run([this, setup = SharedPointer<SetupView>(setup),
+                       themedEditor](CNewFileSelector *sel) {
             if (sel->getNumSelectedFiles() == 0)
                 return;
             importClassicFromDll(themedEditor, setup, pathFromUTF8(sel->getSelectedFile(0)));
@@ -260,34 +261,39 @@ void Controller::showSetupOverlay(VST3Editor *editor) {
             auto key = DllKey::of(*dll);
             if (seen && *seen == key) {
                 seen.reset();
-                Call::later(folderImport);
+                deferUI(folderImport);
             } else {
                 seen = key;
             }
         },
         1000);
-    // Only schedule the deferred call when there is something to import.
-    // On Linux a deferred call is a one-shot timer on the host's run loop,
-    // and one left pending when the editor closes right after opening
-    // (pluginval's editor tests do exactly that) outlives the frame.
     if (findFolderDll())
-        Call::later(folderImport);
+        deferUI(folderImport);
 }
 
 void Controller::presentOverlay(VST3Editor *editor, OverlayView *view) {
-    auto *frame = editor ? editor->getFrame() : nullptr;
-    // Refuse if the editor is gone (deferred call after willClose) or an
-    // overlay is already up (right-click passes through overlays to the
-    // context menu, so About Theme... could otherwise stack).
-    if (editor != currentEditor_ || !frame || (overlay_ && frame->isChild(overlay_))) {
+    // Refuse if the editor is gone or an overlay is already up (right-click
+    // passes through overlays to the context menu, so About Theme... could
+    // otherwise stack). Identity is checked before the editor is touched.
+    auto *frame = (editor && editor == currentEditor_) ? editor->getFrame() : nullptr;
+    if (!frame || (overlay_ && frame->isChild(overlay_))) {
         view->forget();
         return;
     }
     overlay_ = view;
     view->setCloseCallback([this, frame, view]() {
-        frame->removeView(view);
-        if (overlay_ == view)
+        // Runs from the overlay's own click handler; removing it there would
+        // free the view mid-dispatch. The deferral is cancelled if the
+        // editor closes first, and recreateUI may already have removed it.
+        deferUI([this, frame, view]() {
+            // overlay_ is cleared by rebuildEditorForTheme, so this also
+            // covers a rebuild in the window that reused the view's address.
+            if (overlay_ != view)
+                return;
             overlay_ = nullptr;
+            if (frame->isChild(view))
+                frame->removeView(view);
+        });
     });
     frame->addView(view);
 }
@@ -308,7 +314,9 @@ void Controller::stopSetupDllWatch() {
 }
 
 void Controller::willClose(VST3Editor * /*editor*/) {
+    cancelDeferredUI();
     stopSetupDllWatch();
+    finishPitchBendSpring();
     monkView_ = nullptr;
     infoButton_ = nullptr;
     currentEditor_ = nullptr;
@@ -339,17 +347,18 @@ void Controller::applyTheme(VST3Editor *editor) {
     }
 }
 
-void Controller::switchTheme(ThemedVST3Editor *editor, const std::filesystem::path &themeDir,
-                             bool bundled) {
+void Controller::selectTheme(const std::filesystem::path &themeDir, bool bundled) {
     // The folder may have been deleted since the menu was built.
     std::error_code ec;
     if (!fs::is_directory(themeDir, ec))
         return;
     themeManager_.setThemePath(themeDir, bundled);
+    deferUI([this]() { rebuildEditorForTheme(); });
+}
 
-    // Callers defer via Call::later or async file dialogs; the editor may
-    // have closed in the meantime. The choice above is still persisted.
-    if (editor != currentEditor_)
+void Controller::rebuildEditorForTheme() {
+    auto *editor = static_cast<ThemedVST3Editor *>(currentEditor_);
+    if (!editor)
         return;
     overlay_ = nullptr; // recreateUI destroys it
     stopSetupDllWatch(); // and the setup screen with it
@@ -358,6 +367,35 @@ void Controller::switchTheme(ThemedVST3Editor *editor, const std::filesystem::pa
         desc->freePlatformResources();
     applyTheme(editor);
     editor->recreateUI();
+}
+
+void Controller::deferUI(std::function<void()> fn) {
+    auto timer = VSTGUI::makeOwned<VSTGUI::CVSTGUITimer>(
+        [this, fn = std::move(fn)](VSTGUI::CVSTGUITimer *t) {
+            t->stop();
+            // CVSTGUITimer::fire holds a guard on the timer, so dropping our
+            // reference from inside the callback is safe.
+            deferredUI_.erase(std::remove_if(deferredUI_.begin(), deferredUI_.end(),
+                                             [t](const auto &p) { return p.get() == t; }),
+                              deferredUI_.end());
+            fn();
+        },
+        10);
+    deferredUI_.push_back(timer);
+}
+
+void Controller::cancelDeferredUI() {
+    for (auto &t : deferredUI_)
+        t->stop();
+    deferredUI_.clear();
+}
+
+tresult PLUGIN_API Controller::terminate() {
+    cancelDeferredUI();
+    stopSetupDllWatch();
+    pitchBendSpringTimer_ = nullptr;
+    pbSpringState_ = PbSpring::Idle;
+    return EditController::terminate();
 }
 
 COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *editor) {
@@ -403,12 +441,10 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
             auto *item = new CCommandMenuItem(std::move(desc));
             fs::path themeDir = t.path;
             bool bundled = t.bundled;
-            item->setActions([this, themedEditor, themeDir, bundled](CCommandMenuItem *) {
-                // Rebuilding the view tree while the menu's tracking loop is
-                // still running tears down the menu's own parent; defer.
-                Call::later([this, themedEditor, themeDir, bundled]() {
-                    switchTheme(themedEditor, themeDir, bundled);
-                });
+            item->setActions([this, themeDir, bundled](CCommandMenuItem *) {
+                // selectTheme defers the rebuild: doing it while the menu's
+                // tracking loop is still running tears down the menu's parent.
+                selectTheme(themeDir, bundled);
             });
             themeMenu->addEntry(item);
         }
@@ -421,8 +457,11 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
     if (themeManager_.hasTheme()) {
         auto *aboutItem = new CCommandMenuItem(
             CCommandMenuItem::Desc(i18n::str(i18n::StringId::MenuAboutTheme)));
-        aboutItem->setActions([this, themedEditor](CCommandMenuItem *) {
-            Call::later([this, themedEditor]() { showThemeInfoOverlay(themedEditor); });
+        aboutItem->setActions([this](CCommandMenuItem *) {
+            deferUI([this]() {
+                if (currentEditor_)
+                    showThemeInfoOverlay(currentEditor_);
+            });
         });
         menu->addEntry(aboutItem);
     }
@@ -432,12 +471,12 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
     // "Load Theme..." item.
     auto *loadItem =
         new CCommandMenuItem(CCommandMenuItem::Desc(i18n::str(i18n::StringId::MenuLoadTheme)));
-    loadItem->setActions([this, themedEditor](CCommandMenuItem *) {
+    loadItem->setActions([this](CCommandMenuItem *) {
         // Defer file dialog opening until after the context menu's tracking
         // loop has ended.  On macOS, opening NSOpenPanel while the NSMenu is
         // still active crashes the host (e.g. Ableton Live).
-        Call::later([this, themedEditor]() {
-            auto *frame = themedEditor->getFrame();
+        deferUI([this]() {
+            auto *frame = currentEditor_ ? currentEditor_->getFrame() : nullptr;
             if (!frame)
                 return;
 
@@ -455,11 +494,11 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
                 selector->setInitialDirectory(
                     UTF8String(themeManager_.themePath().generic_u8string()));
 
-            selector->run([this, themedEditor](CNewFileSelector *sel) {
+            selector->run([this](CNewFileSelector *sel) {
                 try {
                     if (sel->getNumSelectedFiles() > 0) {
                         auto file = pathFromUTF8(sel->getSelectedFile(0));
-                        switchTheme(themedEditor, file.parent_path(), false);
+                        selectTheme(file.parent_path(), false);
                     }
                 } catch (...) {
                 }
@@ -482,14 +521,17 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
     // "Import Classic Theme from DLL..." item.
     auto *importItem =
         new CCommandMenuItem(CCommandMenuItem::Desc(i18n::str(i18n::StringId::MenuImportClassic)));
-    importItem->setActions([this, themedEditor](CCommandMenuItem *) {
-        Call::later([this, themedEditor]() {
+    importItem->setActions([this](CCommandMenuItem *) {
+        deferUI([this]() {
+            auto *editor = static_cast<ThemedVST3Editor *>(currentEditor_);
+            if (!editor)
+                return;
             if (auto dll = findFolderDll()) {
-                importClassicFromDll(themedEditor, nullptr, *dll);
+                importClassicFromDll(editor, nullptr, *dll);
                 return;
             }
 
-            auto *frame = themedEditor->getFrame();
+            auto *frame = editor->getFrame();
             if (!frame)
                 return;
 
@@ -501,10 +543,12 @@ COptionMenu *Controller::createContextMenu(const CPoint & /*pos*/, VST3Editor *e
             selector->addFileExtension(
                 CFileExtension(i18n::str(i18n::StringId::FileExtDll), "dll"));
 
-            selector->run([this, themedEditor](CNewFileSelector *sel) {
+            selector->run([this](CNewFileSelector *sel) {
                 if (sel->getNumSelectedFiles() == 0)
                     return;
-                importClassicFromDll(themedEditor, nullptr, pathFromUTF8(sel->getSelectedFile(0)));
+                auto *editor = static_cast<ThemedVST3Editor *>(currentEditor_);
+                if (editor)
+                    importClassicFromDll(editor, nullptr, pathFromUTF8(sel->getSelectedFile(0)));
             });
             selector->forget();
         });
@@ -663,10 +707,17 @@ tresult PLUGIN_API Controller::getMidiControllerAssignment(int32 busIndex, int16
 }
 
 tresult PLUGIN_API Controller::setComponentState(IBStream *state) {
+    // Mirrors Processor::setState: a stream saved by an older build with
+    // fewer parameters stops early and leaves the rest at their defaults.
+    // MemoryStream reports success with zero bytes at EOF, so the byte
+    // count is what detects the short read, not the return code.
     for (int i = 0; i < kNumParams; i++) {
-        float v;
-        if (state->read(&v, sizeof(v), nullptr) != kResultOk)
-            return kResultFalse;
+        float v = 0.0f;
+        int32 numRead = 0;
+        if (state->read(&v, sizeof(v), &numRead) != kResultOk || numRead != sizeof(v))
+            break;
+        if (!std::isfinite(v))
+            continue;
         setParamNormalized(static_cast<ParamID>(i), static_cast<ParamValue>(v));
     }
     return kResultOk;
@@ -706,6 +757,16 @@ void Controller::startPitchBendSpring(double from) {
     EditController::beginEdit(kPitchBend);
     pitchBendSpringTimer_ = VSTGUI::makeOwned<VSTGUI::CVSTGUITimer>(
         [this](VSTGUI::CVSTGUITimer *) { tickPitchBendSpring(); }, 16);
+}
+
+void Controller::finishPitchBendSpring() {
+    if (pbSpringState_ != PbSpring::Springing)
+        return;
+    pitchBendSpringTimer_ = nullptr;
+    pbSpringState_ = PbSpring::Idle;
+    performEdit(kPitchBend, 0.5);
+    setParamNormalized(kPitchBend, 0.5);
+    EditController::endEdit(kPitchBend);
 }
 
 void Controller::tickPitchBendSpring() {

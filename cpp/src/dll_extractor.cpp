@@ -88,24 +88,41 @@ static const int kNumResources = sizeof(kResources) / sizeof(kResources[0]);
 
 // --- DIB to RGBA conversion ---
 
-static std::vector<uint8_t> dib_to_rgba(const uint8_t *dib, int width, int height, int bpp) {
-    // BITMAPINFOHEADER is 40 bytes
-    int headerSize = 40;
+static uint32_t rd32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
 
-    // Palette
-    int paletteEntries = 0;
+// |dibSize| is the number of bytes available from |dib| to the end of the
+// file. The size and CRC checks in extractClassicTheme make a mismatch
+// unlikely, but CRC32 is trivial to forge, so every offset derived from the
+// header is checked against the buffer before it is read.
+static std::vector<uint8_t> dib_to_rgba(const uint8_t *dib, size_t dibSize, int width, int height,
+                                        int bpp) {
+    // BITMAPINFOHEADER is 40 bytes
+    const size_t headerSize = 40;
+    if (width <= 0 || height <= 0 || dibSize < headerSize)
+        return {};
+
+    // Palette. biClrUsed comes from the file; the known resources leave it
+    // at 0 (meaning 2^bpp entries). Anything larger than that is bogus.
+    size_t paletteEntries = 0;
     if (bpp <= 8) {
-        int clrUsed = (int)(dib[32] | (dib[33] << 8) | (dib[34] << 16) | (dib[35] << 24));
-        paletteEntries = (clrUsed != 0) ? clrUsed : (1 << bpp);
+        uint32_t clrUsed = rd32(dib + 32);
+        const uint32_t maxEntries = 1u << bpp;
+        if (clrUsed > maxEntries)
+            return {};
+        paletteEntries = clrUsed != 0 ? clrUsed : maxEntries;
     }
     const uint8_t *palette = dib + headerSize;
     const uint8_t *pixels = palette + paletteEntries * 4;
 
     // Row stride padded to 4-byte boundary
-    int rowBytes = ((width * bpp + 31) / 32) * 4;
+    const size_t rowBytes = ((static_cast<size_t>(width) * bpp + 31) / 32) * 4;
+    if (headerSize + paletteEntries * 4 + rowBytes * static_cast<size_t>(height) > dibSize)
+        return {};
 
     // BMP height field can be negative (top-down), but our known resources are positive (bottom-up)
-    int rawH = (int)(dib[8] | (dib[9] << 8) | (dib[10] << 16) | (dib[11] << 24));
+    int32_t rawH = static_cast<int32_t>(rd32(dib + 8));
     bool bottomUp = (rawH > 0);
 
     std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4);
@@ -113,7 +130,7 @@ static std::vector<uint8_t> dib_to_rgba(const uint8_t *dib, int width, int heigh
     for (int y = 0; y < height; y++) {
         int srcRow = bottomUp ? (height - 1 - y) : y;
         const uint8_t *row = pixels + srcRow * rowBytes;
-        uint8_t *dst = rgba.data() + y * width * 4;
+        uint8_t *dst = rgba.data() + static_cast<size_t>(y) * width * 4;
 
         for (int x = 0; x < width; x++) {
             uint8_t r, g, b;
@@ -122,10 +139,14 @@ static std::vector<uint8_t> dib_to_rgba(const uint8_t *dib, int width, int heigh
                 g = row[x * 3 + 1];
                 r = row[x * 3 + 2];
             } else if (bpp == 8) {
-                uint8_t idx = row[x];
-                b = palette[idx * 4 + 0];
-                g = palette[idx * 4 + 1];
-                r = palette[idx * 4 + 2];
+                size_t idx = row[x];
+                if (idx < paletteEntries) {
+                    b = palette[idx * 4 + 0];
+                    g = palette[idx * 4 + 1];
+                    r = palette[idx * 4 + 2];
+                } else {
+                    r = g = b = 0;
+                }
             } else {
                 r = g = b = 128;
             }
@@ -218,11 +239,10 @@ ExtractionResult extractClassicTheme(const fs::path &dllPath, const fs::path &co
         const uint8_t *dib = dll.data() + res.fileOffset;
 
         // Sanity check: BITMAPINFOHEADER.biSize should be 40
-        uint32_t biSize = dib[0] | (dib[1] << 8) | (dib[2] << 16) | (dib[3] << 24);
-        if (biSize != 40)
+        if (rd32(dib) != 40)
             continue;
 
-        auto rgba = dib_to_rgba(dib, res.width, res.height, res.bpp);
+        auto rgba = dib_to_rgba(dib, fileSize - res.fileOffset, res.width, res.height, res.bpp);
         if (rgba.empty())
             continue;
 

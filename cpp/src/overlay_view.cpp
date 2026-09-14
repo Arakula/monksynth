@@ -58,9 +58,11 @@ CMouseEventResult OverlayView::onMouseDown(CPoint &where, const CButtonState &bu
     local.offset(-bounds.left, -bounds.top);
 
     if (closeBtnRect_.pointInside(local)) {
+        // The owner removes the view; it defers that itself, since removing
+        // a view from inside its own click handler frees it mid-dispatch.
         if (closeCb_) {
             auto cb = closeCb_;
-            Call::later([cb]() { cb(); });
+            cb();
         }
         return kMouseEventHandled;
     }

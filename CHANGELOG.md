@@ -2,6 +2,19 @@
 
 All notable changes to MonkSynth will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- Memory-safety pass following a sanitizer and code audit of the DSP core, the plugin layer and the DLL importer. None of these crashed in normal use, but each was real:
+  - Sample rates above 192 kHz sized the grain past the fixed voice tables and wrote into the next voice's state. The grain is now clamped to the table size, and rates of zero, NaN or outside 1 kHz to 768 kHz fall back to 44.1 kHz instead of spinning the vibrato phase wrap forever.
+  - NaN parameter values passed the range clamps and, on x86, turned into INT_MIN table indices in the vowel lookup and the delay read. Every setter's clamp is now NaN-safe and pitch inputs are clamped to the audible range.
+  - The delay read index could round to exactly one past the end of the line at certain rate and sample-rate pairs. The index is now split from the fraction before wrapping.
+  - reset() re-arms the output gain smoothers so a non-finite value can't persist across a reset; a null check in set_sample_rate came one line too late.
+  - Deferred UI work (theme switch, menu actions, overlay close, folder import) used VSTGUI's Call::later, which can't be cancelled, so a closure could fire after the host had released the editor. Deferred work is now owned by the controller and cancelled when the editor closes; theme selection is persisted immediately and only the view rebuild is deferred. The pitch-bend spring-back timer is also stopped when the editor closes.
+  - setComponentState read an uninitialized float on a truncated state stream; it now stops at the short read and leaves the remaining parameters at their defaults, matching the processor.
+  - The classic DLL importer trusted the palette size in the file's bitmap header. A file of the right size with a forged CRC32 could make it read far past the buffer. Header fields are now read unsigned and every offset is checked against the file before decoding.
+- New DSP unit tests cover 384 kHz, zero and NaN sample rates, NaN parameters, the delay wrap and reset; the suite runs clean under AddressSanitizer and UndefinedBehaviorSanitizer.
+
 ## [1.0.0] - 2026-09-13
 
 First stable release. The beta line has been in use since April; this drops the beta tag and gathers everything since 0.2.0-beta.15 below.

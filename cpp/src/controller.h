@@ -12,7 +12,9 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
+#include <vector>
 
 namespace MonkSynth {
 
@@ -89,8 +91,11 @@ class Controller : public Steinberg::Vst::EditController,
         return static_cast<Steinberg::Vst::IEditController *>(new Controller());
     }
 
+    ~Controller() override { cancelDeferredUI(); }
+
     // EditController overrides
     Steinberg::tresult PLUGIN_API initialize(Steinberg::FUnknown *context) override;
+    Steinberg::tresult PLUGIN_API terminate() override;
     Steinberg::IPlugView *PLUGIN_API createView(const char *name) override;
     Steinberg::tresult PLUGIN_API setParamNormalized(Steinberg::Vst::ParamID tag,
                                                      Steinberg::Vst::ParamValue value) override;
@@ -116,8 +121,12 @@ class Controller : public Steinberg::Vst::EditController,
     void applyTheme(VST3Editor *editor);
     // Persists |themeDir| as the active theme and rebuilds the editor UI
     // with its bitmaps.
-    void switchTheme(ThemedVST3Editor *editor, const std::filesystem::path &themeDir,
-                     bool bundled);
+    // Persists the choice immediately and rebuilds the open editor (if any)
+    // on the next deferred tick, since callers are click handlers, menu
+    // actions and file-panel callbacks that can't rebuild the view tree
+    // they are dispatching from.
+    void selectTheme(const std::filesystem::path &themeDir, bool bundled);
+    void rebuildEditorForTheme();
     // Adds a modal overlay to the editor's frame unless one is already open.
     void presentOverlay(VST3Editor *editor, OverlayView *view);
     void showSetupOverlay(VST3Editor *editor);
@@ -148,6 +157,19 @@ class Controller : public Steinberg::Vst::EditController,
     bool inSetParam_ = false; // re-entrancy guard for setParamNormalized
 
     VSTGUI::SharedPointer<VSTGUI::CVSTGUITimer> pitchBendSpringTimer_;
+    // Settles the pitch bend and closes the edit gesture if a spring-back
+    // is in flight; used when the editor closes mid-animation.
+    void finishPitchBendSpring();
+
+    // Deferred UI work. VSTGUI's Call::later cannot be cancelled, and a
+    // closure firing after the host has released the editor is a
+    // use-after-free (JUCE based hosts on Linux keep dispatching timers
+    // after the window closes). These timers are owned here and stopped in
+    // willClose and terminate. Closures read currentEditor_ when they run
+    // rather than trusting a captured editor pointer.
+    void deferUI(std::function<void()> fn);
+    void cancelDeferredUI();
+    std::vector<VSTGUI::SharedPointer<VSTGUI::CVSTGUITimer>> deferredUI_;
     // While the setup screen is showing, polls the themes folder so a DLL
     // dropped in is imported without another click. Non-null exactly while
     // the setup screen is up on currentEditor_.
