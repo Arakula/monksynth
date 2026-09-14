@@ -14,8 +14,10 @@ env:
   # Production SignPath certificate issued 2026-05-12. Signing requests
   # against the release-signing policy require manual approval in the
   # SignPath UI, so the workflow will pause at the sign steps until
-  # approved.
-  SIGN_WINDOWS_VIA_SIGNPATH: 'true'
+  # approved. Only sign release (tag) builds; manual dispatches produce
+  # unsigned Windows artifacts so CI can be exercised without a signing
+  # request. Set to 'false' to disable signing entirely.
+  SIGN_WINDOWS_VIA_SIGNPATH: ${{ startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   build:
