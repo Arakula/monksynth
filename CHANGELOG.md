@@ -11,6 +11,9 @@ All notable changes to MonkSynth will be documented in this file.
 - "About Theme..." in the right-click menu shows the active theme's credits: name, author, description and a clickable link, read from new optional `description` and `url` fields in `theme.json`. The imported classic theme credits AudioNerdz and links to audionerdz.nl.
 
 ### Fixed
+- Notes, pitch bend, XY-pad moves and parameter automation are now applied at their exact sample position within the audio block instead of at the block boundary. Previously every note began up to one buffer early, by an amount that varied note to note, which was audible as sloppy timing at large buffer sizes and visible in bounced audio. Affected every host; reported against Cubase 14 (#22).
+- Unison and output gain changes are smoothed over a fixed ~5 ms rather than over one audio callback, so the ramp no longer depends on buffer size.
+- Blocks longer than 8192 samples (some offline renders) are rendered in full instead of leaving the tail of the buffer unwritten.
 - `Controller::beginEdit`/`endEdit` no longer declare `PLUGIN_API`, matching the SDK's `EditController` signature. Fixes compilation of 32-bit Windows builds. Contributed by Arakula (#26).
 
 ## [0.2.0-beta.15] - 2026-05-14

@@ -116,12 +116,128 @@ static void test_reset_clears_notes(void) {
     monk_synth_free(s);
 }
 
+/* Rendering is silent until note-on, and the note starts where the caller
+ * splits the render — the property the VST3 shell relies on to place notes
+ * at their sample offset (#22). */
+static void test_process_starts_at_split_point(void) {
+    MonkSynthEngine *s = monk_synth_new(SR);
+    assert(s);
+    monk_synth_set_attack(s, 0.0f);
+
+    float l[256], r[256];
+    for (int i = 0; i < 256; i++)
+        l[i] = r[i] = 123.0f; /* sentinel: every sample must be overwritten */
+
+    monk_synth_process(s, l, r, 100);
+    for (int i = 0; i < 100; i++)
+        assert(l[i] == 0.0f && r[i] == 0.0f);
+
+    monk_synth_note_on(s, 60, 1.0f);
+    monk_synth_process(s, l + 100, r + 100, 156);
+
+    int nonzero = 0;
+    for (int i = 100; i < 256; i++) {
+        assert(l[i] != 123.0f && r[i] != 123.0f);
+        if (l[i] != 0.0f)
+            nonzero++;
+    }
+    assert(nonzero > 0);
+
+    monk_synth_free(s);
+}
+
+/* Splitting a block into many small calls must produce the same audio as
+ * one call: no per-call state may depend on the call length. */
+static void test_process_split_equals_whole(void) {
+    MonkSynthEngine *a = monk_synth_new(SR);
+    MonkSynthEngine *b = monk_synth_new(SR);
+    assert(a && b);
+    monk_synth_set_unison(a, 3);
+    monk_synth_set_unison(b, 3);
+    /* No glide: the pitch-compensated output gain is re-targeted per call,
+     * so a moving pitch would legitimately differ between chunkings. */
+    monk_synth_set_glide(a, 0.0f);
+    monk_synth_set_glide(b, 0.0f);
+    monk_synth_note_on(a, 57, 0.8f);
+    monk_synth_note_on(b, 57, 0.8f);
+
+    enum { N = 4096 };
+    static float la[N], ra[N], lb[N], rb[N];
+    monk_synth_process(a, la, ra, N);
+
+    /* Irregular chunk sizes, including single samples. */
+    uint32_t sizes[] = {1, 7, 64, 1, 500, 3, 1000, 2};
+    uint32_t pos = 0, k = 0;
+    while (pos < N) {
+        uint32_t n = sizes[k++ % 8];
+        if (pos + n > N)
+            n = N - pos;
+        monk_synth_process(b, lb + pos, rb + pos, n);
+        pos += n;
+    }
+
+    for (int i = 0; i < N; i++) {
+        assert(la[i] == lb[i]);
+        assert(ra[i] == rb[i]);
+    }
+
+    monk_synth_free(a);
+    monk_synth_free(b);
+}
+
+/* Blocks longer than the internal scratch buffer are rendered in full. */
+static void test_process_block_larger_than_scratch(void) {
+    MonkSynthEngine *s = monk_synth_new(SR);
+    assert(s);
+    monk_synth_note_on(s, 60, 1.0f);
+
+    enum { N = MONK_MAX_BUF + 1000 };
+    static float l[N], r[N];
+    for (int i = 0; i < N; i++)
+        l[i] = r[i] = 123.0f;
+
+    monk_synth_process(s, l, r, N);
+    for (int i = 0; i < N; i++)
+        assert(l[i] != 123.0f && r[i] != 123.0f);
+
+    monk_synth_free(s);
+}
+
+/* A unison change ramps the gain over a fixed time, not over one call, so
+ * a tiny render right after the change must not jump to the new gain. */
+static void test_unison_gain_ramp_is_time_based(void) {
+    MonkSynthEngine *s = monk_synth_new(SR);
+    assert(s);
+    monk_synth_note_on(s, 60, 1.0f);
+
+    float l[64], r[64];
+    monk_synth_process(s, l, r, 64);
+    assert(float_near(s->current_voice_gain, 1.0f, 1e-6f));
+
+    monk_synth_set_unison(s, 9); /* target 1/3 */
+    monk_synth_process(s, l, r, 1);
+    /* After one sample of a ~5 ms ramp we should have moved only a little. */
+    assert(s->current_voice_gain > 0.95f);
+    assert(s->current_voice_gain < 1.0f);
+
+    /* ...and after a good while, we should have arrived. */
+    for (int i = 0; i < 100; i++)
+        monk_synth_process(s, l, r, 64);
+    assert(float_near(s->current_voice_gain, s->target_voice_gain, 1e-3f));
+
+    monk_synth_free(s);
+}
+
 int main(void) {
     test_note_stack_lifo();
     test_note_stack_overflow();
     test_unison_detune_propagates();
     test_pitch_bend_propagates_to_all_voices();
     test_reset_clears_notes();
+    test_process_starts_at_split_point();
+    test_process_split_equals_whole();
+    test_process_block_larger_than_scratch();
+    test_unison_gain_ramp_is_time_based();
 
     printf("test_synth: all tests passed\n");
     return 0;

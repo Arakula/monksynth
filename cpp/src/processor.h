@@ -32,6 +32,24 @@ class Processor : public Steinberg::Vst::AudioEffect {
   private:
     void applyParametersToDsp();
 
+    // One parameter point or note event, positioned within the current
+    // block. process() merges both sources into a single sample-ordered
+    // timeline so everything lands at its exact offset.
+    struct TimelinePoint {
+        enum class Kind : Steinberg::uint8 { Param, NoteOn, NoteOff };
+        Steinberg::int32 offset = 0;
+        Steinberg::int32 seq = 0; // arrival order, breaks ties at equal offset
+        Kind kind = Kind::Param;
+        Steinberg::Vst::ParamID id = 0; // Param
+        float value = 0.0f;             // Param: normalized value; NoteOn: velocity
+        Steinberg::uint8 pitch = 0;     // NoteOn / NoteOff
+    };
+    static constexpr int kMaxTimeline = 1024;
+
+    void applyParameter(Steinberg::Vst::ParamID id, float value, Steinberg::int32 offset,
+                        Steinberg::Vst::ProcessData &data);
+    void applyTimelinePoint(const TimelinePoint &p, Steinberg::Vst::ProcessData &data);
+
     MonkSynthEngine *synth_ = nullptr;
     // Order must match the ParamID enum in plugin_cids.h.
     // PitchBend (idx 19): 0.5 = 0 semitones (RangeParameter midpoint).
@@ -44,6 +62,7 @@ class Processor : public Steinberg::Vst::AudioEffect {
     float xyPendingPitch_ = 0.5f;
     int midiNoteCount_ = 0;
     bool lastNoteActive_ = false;
+    TimelinePoint timeline_[kMaxTimeline];
 };
 
 } // namespace MonkSynth

@@ -5,6 +5,7 @@
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 
+#include <algorithm>
 #include <cmath>
 
 using namespace Steinberg;
@@ -126,173 +127,235 @@ tresult PLUGIN_API Processor::setState(IBStream* state) {
     return kResultOk;
 }
 
+void Processor::applyParameter(ParamID id, float fval, int32 offset, ProcessData& data) {
+    if (id < kNumParams) {
+        paramValues_[id] = fval;
+    }
+
+    switch (id) {
+        case kPortTime:  monk_synth_set_glide(synth_, fval); break;
+        case kVowel:     monk_synth_set_vowel(synth_, fval); break;
+        case kDelay:     monk_synth_set_delay_mix(synth_, fval); break;
+        case kHeadSize:  monk_synth_set_voice(synth_, fval); break;
+        case kVibrato:    monk_synth_set_vibrato(synth_, fval); break;
+        case kVibratoRate: monk_synth_set_vibrato_rate(synth_, fval); break;
+        case kAspiration:  monk_synth_set_aspiration(synth_, fval); break;
+        case kAttack:      monk_synth_set_attack(synth_, fval * 5.0f); break;
+        case kDecay:       monk_synth_set_decay(synth_, fval * 5.0f); break;
+        case kSustain:     monk_synth_set_sustain(synth_, fval); break;
+        case kRelease:      monk_synth_set_release(synth_, fval * 5.0f); break;
+        case kUnison:       monk_synth_set_unison(synth_, (int)(fval * 9.0f + 1.5f)); break;
+        case kUnisonDetune: monk_synth_set_unison_detune(synth_, fval * 50.0f); break;
+        case kDelayRate:    monk_synth_set_delay_rate(synth_, fval); break;
+        case kLevel:        monk_synth_set_level(synth_, fval); break;
+        case kUnisonVoiceSpread: monk_synth_set_unison_voice_spread(synth_, fval * 0.5f); break;
+        case kXYNoteOn:
+            if (fval > 0.5f) {
+                xyNoteActive_ = true;
+                float startHz = 130.81f * powf(2.0f, xyPendingPitch_);
+                monk_synth_set_pitch_hz(synth_, startHz);
+            } else {
+                xyNoteActive_ = false;
+                if (midiNoteCount_ > 0) {
+                    // MIDI keys still held: slide back to held note
+                    monk_synth_restore_note_stack(synth_);
+                } else {
+                    monk_synth_note_off(synth_, 60);
+                }
+            }
+            break;
+        case kXYPitchTarget:
+            xyPendingPitch_ = fval;
+            if (xyNoteActive_) {
+                // C3 to C4 (131-262 Hz), one octave
+                float hz = 130.81f * powf(2.0f, fval);
+                monk_synth_set_pitch_hz(synth_, hz);
+            }
+            break;
+        case kXYVowel:
+            monk_synth_set_vowel(synth_, fval);
+            break;
+        case kPitchBend:
+            // RangeParameter [-12,12]: normalized 0.5 = 0 semitones.
+            // Driven by the in-plugin slider, DAW automation, or the
+            // hardware wheel in Pitch mode. In Both / BothInverted
+            // modes the wheel is routed to kPitchWheelRaw instead,
+            // so this case never needs to touch vowel.
+            monk_synth_set_pitch_bend(synth_, (fval - 0.5f) * 24.0f);
+            break;
+        case kPitchBendRouting:
+            // Stored in paramValues_ only; the controller handles
+            // IMidiMapping re-query. No DSP side-effect from here.
+            break;
+        case kPitchWheelRaw: {
+            // Hidden hub — only live in Both / BothInverted modes.
+            // Fans out the hardware pitch wheel to pitch bend and
+            // vowel without entangling the user-facing kPitchBend
+            // slider or its automation lane.
+            auto mode = pitchBendModeFromNormalized(paramValues_[kPitchBendRouting]);
+            if (mode != PitchBendMode::Both &&
+                mode != PitchBendMode::BothInverted)
+                break;
+
+            monk_synth_set_pitch_bend(synth_, (fval - 0.5f) * 24.0f);
+            paramValues_[kPitchBend] = fval;
+            if (data.outputParameterChanges) {
+                int32 pbIndex = 0;
+                auto *pq = data.outputParameterChanges->addParameterData(kPitchBend, pbIndex);
+                if (pq)
+                    pq->addPoint(offset, static_cast<ParamValue>(fval), pbIndex);
+            }
+
+            // Skip the vowel coupling while the XY pad is tracking,
+            // since the pad's smoothed vowel writeback (after the
+            // audio render) would fight this write in the same block.
+            if (!xyNoteActive_) {
+                float vowelVal = (mode == PitchBendMode::BothInverted)
+                                     ? (1.0f - fval)
+                                     : fval;
+                monk_synth_set_vowel(synth_, vowelVal);
+                paramValues_[kVowel] = vowelVal;
+                if (data.outputParameterChanges) {
+                    int32 vIndex = 0;
+                    auto *vq = data.outputParameterChanges->addParameterData(kVowel, vIndex);
+                    if (vq)
+                        vq->addPoint(offset, static_cast<ParamValue>(vowelVal), vIndex);
+                }
+            }
+            break;
+        }
+        default: break;
+    }
+}
+
+void Processor::applyTimelinePoint(const TimelinePoint& p, ProcessData& data) {
+    switch (p.kind) {
+        case TimelinePoint::Kind::Param:
+            applyParameter(p.id, p.value, std::max<int32>(p.offset, 0), data);
+            break;
+        case TimelinePoint::Kind::NoteOn:
+            monk_synth_note_on(synth_, p.pitch, p.value);
+            midiNoteCount_++;
+            break;
+        case TimelinePoint::Kind::NoteOff:
+            if (midiNoteCount_ > 0) midiNoteCount_--;
+            if (xyNoteActive_ && midiNoteCount_ == 0) {
+                // XY pad is held — don't release, just clear the
+                // note stack so XY pad pitch stays in control.
+                monk_synth_note_off(synth_, p.pitch);
+                // note_off removed it from the stack; if stack is
+                // now empty the DSP would release — re-assert pitch
+                monk_synth_set_pitch_hz(synth_,
+                    130.81f * powf(2.0f, xyPendingPitch_));
+            } else {
+                monk_synth_note_off(synth_, p.pitch);
+            }
+            break;
+    }
+}
+
 tresult PLUGIN_API Processor::process(ProcessData& data) {
     if (!synth_) return kResultOk;
 
-    // --- Handle parameter changes ---
+    // --- Output buffers ---
+    // The bus may be present but inactive (null channel pointers); events
+    // and parameters must still be applied so state stays in sync.
+    const int32 numSamples = data.numSamples;
+    float* outL = nullptr;
+    float* outR = nullptr;
+    if (data.numOutputs >= 1 && data.outputs[0].numChannels >= 2 &&
+        data.outputs[0].channelBuffers32) {
+        outL = data.outputs[0].channelBuffers32[0];
+        outR = data.outputs[0].channelBuffers32[1];
+    }
+
+    int32 rendered = 0;
+    auto renderTo = [&](int32 upTo) {
+        upTo = std::min(upTo, numSamples);
+        if (outL && outR && upTo > rendered) {
+            monk_synth_process(synth_, outL + rendered, outR + rendered,
+                               static_cast<uint32_t>(upTo - rendered));
+            rendered = upTo;
+        }
+    };
+
+    // --- Merge parameter points and note events into one timeline ---
+    // Both are timestamped within the block. Applying them all up front and
+    // then rendering the whole block started every note (and bend, and XY
+    // pad move) at the block boundary, up to one buffer early with the
+    // error varying from note to note (#22). Instead: sort everything by
+    // offset, and render up to each point before applying it. At equal
+    // offsets parameters are applied before notes, as before.
+    int count = 0;
+    auto push = [&](TimelinePoint p) {
+        if (count < kMaxTimeline) {
+            p.seq = count;
+            timeline_[count++] = p;
+        } else {
+            // Pathological event density; apply immediately rather than
+            // drop it. Ordering is only approximate past this point.
+            renderTo(p.offset);
+            applyTimelinePoint(p, data);
+        }
+    };
+
     if (data.inputParameterChanges) {
         int32 numParams = data.inputParameterChanges->getParameterCount();
         for (int32 i = 0; i < numParams; i++) {
             auto* queue = data.inputParameterChanges->getParameterData(i);
             if (!queue) continue;
-
-            auto id = queue->getParameterId();
+            ParamID id = queue->getParameterId();
             int32 numPoints = queue->getPointCount();
-            if (numPoints <= 0) continue;
-
-            // Use the last value in the queue
-            ParamValue value;
-            int32 sampleOffset;
-            queue->getPoint(numPoints - 1, sampleOffset, value);
-
-            float fval = static_cast<float>(value);
-            if (id < kNumParams) {
-                paramValues_[id] = fval;
-            }
-
-            switch (id) {
-                case kPortTime:  monk_synth_set_glide(synth_, fval); break;
-                case kVowel:     monk_synth_set_vowel(synth_, fval); break;
-                case kDelay:     monk_synth_set_delay_mix(synth_, fval); break;
-                case kHeadSize:  monk_synth_set_voice(synth_, fval); break;
-                case kVibrato:    monk_synth_set_vibrato(synth_, fval); break;
-                case kVibratoRate: monk_synth_set_vibrato_rate(synth_, fval); break;
-                case kAspiration:  monk_synth_set_aspiration(synth_, fval); break;
-                case kAttack:      monk_synth_set_attack(synth_, fval * 5.0f); break;
-                case kDecay:       monk_synth_set_decay(synth_, fval * 5.0f); break;
-                case kSustain:     monk_synth_set_sustain(synth_, fval); break;
-                case kRelease:      monk_synth_set_release(synth_, fval * 5.0f); break;
-                case kUnison:       monk_synth_set_unison(synth_, (int)(fval * 9.0f + 1.5f)); break;
-                case kUnisonDetune: monk_synth_set_unison_detune(synth_, fval * 50.0f); break;
-                case kDelayRate:    monk_synth_set_delay_rate(synth_, fval); break;
-                case kLevel:        monk_synth_set_level(synth_, fval); break;
-                case kUnisonVoiceSpread: monk_synth_set_unison_voice_spread(synth_, fval * 0.5f); break;
-                case kXYNoteOn:
-                    if (fval > 0.5f) {
-                        xyNoteActive_ = true;
-                        float startHz = 130.81f * powf(2.0f, xyPendingPitch_);
-                        monk_synth_set_pitch_hz(synth_, startHz);
-                    } else {
-                        xyNoteActive_ = false;
-                        if (midiNoteCount_ > 0) {
-                            // MIDI keys still held: slide back to held note
-                            monk_synth_restore_note_stack(synth_);
-                        } else {
-                            monk_synth_note_off(synth_, 60);
-                        }
-                    }
-                    break;
-                case kXYPitchTarget:
-                    xyPendingPitch_ = fval;
-                    if (xyNoteActive_) {
-                        // C3 to C4 (131-262 Hz), one octave
-                        float hz = 130.81f * powf(2.0f, fval);
-                        monk_synth_set_pitch_hz(synth_, hz);
-                    }
-                    break;
-                case kXYVowel:
-                    monk_synth_set_vowel(synth_, fval);
-                    break;
-                case kPitchBend:
-                    // RangeParameter [-12,12]: normalized 0.5 = 0 semitones.
-                    // Driven by the in-plugin slider, DAW automation, or the
-                    // hardware wheel in Pitch mode. In Both / BothInverted
-                    // modes the wheel is routed to kPitchWheelRaw instead,
-                    // so this case never needs to touch vowel.
-                    monk_synth_set_pitch_bend(synth_, (fval - 0.5f) * 24.0f);
-                    break;
-                case kPitchBendRouting:
-                    // Stored in paramValues_ only; the controller handles
-                    // IMidiMapping re-query. No DSP side-effect from here.
-                    break;
-                case kPitchWheelRaw: {
-                    // Hidden hub — only live in Both / BothInverted modes.
-                    // Fans out the hardware pitch wheel to pitch bend and
-                    // vowel without entangling the user-facing kPitchBend
-                    // slider or its automation lane.
-                    auto mode = pitchBendModeFromNormalized(paramValues_[kPitchBendRouting]);
-                    if (mode != PitchBendMode::Both &&
-                        mode != PitchBendMode::BothInverted)
-                        break;
-
-                    monk_synth_set_pitch_bend(synth_, (fval - 0.5f) * 24.0f);
-                    paramValues_[kPitchBend] = fval;
-                    if (data.outputParameterChanges) {
-                        int32 pbIndex = 0;
-                        auto *pq = data.outputParameterChanges->addParameterData(kPitchBend,
-                                                                                  pbIndex);
-                        if (pq)
-                            pq->addPoint(0, static_cast<ParamValue>(fval), pbIndex);
-                    }
-
-                    // Skip the vowel coupling while the XY pad is tracking,
-                    // since the pad's smoothed vowel writeback (after the
-                    // audio render) would fight this write in the same block.
-                    if (!xyNoteActive_) {
-                        float vowelVal = (mode == PitchBendMode::BothInverted)
-                                             ? (1.0f - fval)
-                                             : fval;
-                        monk_synth_set_vowel(synth_, vowelVal);
-                        paramValues_[kVowel] = vowelVal;
-                        if (data.outputParameterChanges) {
-                            int32 vIndex = 0;
-                            auto *vq =
-                                data.outputParameterChanges->addParameterData(kVowel, vIndex);
-                            if (vq)
-                                vq->addPoint(0, static_cast<ParamValue>(vowelVal), vIndex);
-                        }
-                    }
-                    break;
-                }
-                default: break;
+            for (int32 j = 0; j < numPoints; j++) {
+                int32 sampleOffset = 0;
+                ParamValue value = 0.0;
+                if (queue->getPoint(j, sampleOffset, value) != kResultOk) continue;
+                TimelinePoint p;
+                p.kind = TimelinePoint::Kind::Param;
+                p.offset = sampleOffset;
+                p.id = id;
+                p.value = static_cast<float>(value);
+                push(p);
             }
         }
     }
 
-    // --- Handle MIDI events ---
     if (data.inputEvents) {
         int32 numEvents = data.inputEvents->getEventCount();
         for (int32 i = 0; i < numEvents; i++) {
             Event event;
             if (data.inputEvents->getEvent(i, event) != kResultOk) continue;
-
-            switch (event.type) {
-                case Event::kNoteOnEvent:
-                    monk_synth_note_on(synth_,
-                        static_cast<uint8_t>(event.noteOn.pitch),
-                        event.noteOn.velocity);
-                    midiNoteCount_++;
-                    break;
-                case Event::kNoteOffEvent:
-                    if (midiNoteCount_ > 0) midiNoteCount_--;
-                    if (xyNoteActive_ && midiNoteCount_ == 0) {
-                        // XY pad is held — don't release, just clear the
-                        // note stack so XY pad pitch stays in control.
-                        monk_synth_note_off(synth_,
-                            static_cast<uint8_t>(event.noteOff.pitch));
-                        // note_off removed it from the stack; if stack is
-                        // now empty the DSP would release — re-assert pitch
-                        monk_synth_set_pitch_hz(synth_,
-                            130.81f * powf(2.0f, xyPendingPitch_));
-                    } else {
-                        monk_synth_note_off(synth_,
-                            static_cast<uint8_t>(event.noteOff.pitch));
-                    }
-                    break;
-                default:
-                    break;
+            // Only note on/off affect the synth; other event kinds (note
+            // expression, poly pressure, sysex) must not split the render.
+            TimelinePoint p;
+            p.offset = event.sampleOffset;
+            if (event.type == Event::kNoteOnEvent) {
+                p.kind = TimelinePoint::Kind::NoteOn;
+                p.pitch = static_cast<uint8>(event.noteOn.pitch);
+                p.value = event.noteOn.velocity;
+            } else if (event.type == Event::kNoteOffEvent) {
+                p.kind = TimelinePoint::Kind::NoteOff;
+                p.pitch = static_cast<uint8>(event.noteOff.pitch);
+            } else {
+                continue;
             }
+            push(p);
         }
     }
 
-    // --- Process audio ---
-    if (data.numOutputs < 1 || data.numSamples == 0) return kResultOk;
+    std::sort(timeline_, timeline_ + count, [](const TimelinePoint& a, const TimelinePoint& b) {
+        return a.offset != b.offset ? a.offset < b.offset : a.seq < b.seq;
+    });
 
-    auto& output = data.outputs[0];
-    float* outL = output.channelBuffers32[0];
-    float* outR = output.channelBuffers32[1];
+    // --- Render, applying each point at its offset ---
+    for (int i = 0; i < count; i++) {
+        renderTo(timeline_[i].offset);
+        applyTimelinePoint(timeline_[i], data);
+    }
 
-    monk_synth_process(synth_, outL, outR, static_cast<uint32_t>(data.numSamples));
+    if (data.numOutputs < 1 || numSamples == 0) return kResultOk;
+
+    renderTo(numSamples);
 
     // --- Send note-held state to controller for monk animation ---
     bool active = (midiNoteCount_ > 0 || xyNoteActive_);
@@ -315,7 +378,7 @@ tresult PLUGIN_API Processor::process(ProcessData& data) {
             vq->addPoint(0, static_cast<ParamValue>(monk_synth_get_vowel(synth_)), index);
     }
 
-    output.silenceFlags = 0;
+    data.outputs[0].silenceFlags = 0;
     return kResultOk;
 }
 
