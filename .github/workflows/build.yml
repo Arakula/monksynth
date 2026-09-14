@@ -305,11 +305,16 @@ jobs:
       - name: Package VST3
         shell: bash
         run: |
+          # The zip is the only download for Linux (no installer), so it also
+          # carries the factory presets; see README "Presets" for where they go.
+          ZIP="$GITHUB_WORKSPACE/${{ matrix.artifact_name }}.zip"
           cd "$(dirname "${{ steps.find_vst3.outputs.path }}")"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            7z a -tzip "$GITHUB_WORKSPACE/${{ matrix.artifact_name }}.zip" "MonkSynth.vst3"
+            7z a -tzip "$ZIP" "MonkSynth.vst3"
+            cd "$GITHUB_WORKSPACE" && 7z a -tzip "$ZIP" presets/*.vstpreset
           else
-            zip -r "$GITHUB_WORKSPACE/${{ matrix.artifact_name }}.zip" "MonkSynth.vst3"
+            zip -r "$ZIP" "MonkSynth.vst3"
+            cd "$GITHUB_WORKSPACE" && zip "$ZIP" presets/*.vstpreset
           fi
 
       - name: Build Windows installer
@@ -397,6 +402,7 @@ jobs:
           rm "${{ matrix.artifact_name }}.zip"
           cd "$(dirname "${{ steps.find_vst3.outputs.path }}")"
           zip -r "$GITHUB_WORKSPACE/${{ matrix.artifact_name }}.zip" "MonkSynth.vst3"
+          cd "$GITHUB_WORKSPACE" && zip "${{ matrix.artifact_name }}.zip" presets/*.vstpreset
 
       - name: Notarize AU
         if: runner.os == 'macOS'

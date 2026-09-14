@@ -11,6 +11,7 @@ All notable changes to MonkSynth will be documented in this file.
 - "About Theme..." in the right-click menu shows the active theme's credits: name, author, description and a clickable link, read from new optional `description` and `url` fields in `theme.json`. The imported classic theme credits AudioNerdz and links to audionerdz.nl.
 
 ### Fixed
+- The VST3 zip downloads now include the factory presets, and the README says where to put them. Linux had no way to get them before since it has no installer (#21).
 - Notes, pitch bend, XY-pad moves and parameter automation are now applied at their exact sample position within the audio block instead of at the block boundary. Previously every note began up to one buffer early, by an amount that varied note to note, which was audible as sloppy timing at large buffer sizes and visible in bounced audio. Affected every host; reported against Cubase 14 (#22).
 - Unison and output gain changes are smoothed over a fixed ~5 ms rather than over one audio callback, so the ramp no longer depends on buffer size.
 - Blocks longer than 8192 samples (some offline renders) are rendered in full instead of leaving the tail of the buffer unwritten.

@@ -82,6 +82,16 @@ The Linux build is verified on each release to load cleanly under strict loader 
 
 If your distro isn't listed it most likely still works — these are smoke-tested in CI to catch the missing-shared-library class of bug, not an exhaustive support claim. The plugin is built on Ubuntu 22.04 (glibc 2.35), so any distro with glibc ≥ 2.35 should be compatible. Reports from other distros are welcome via [GitHub Issues](https://github.com/JonET/monksynth/issues).
 
+## Presets
+
+The Windows and macOS installers put the five factory presets where your DAW expects them. If you use the zip downloads (the only option on Linux), copy the `presets/*.vstpreset` files from the zip into the VST3 preset folder for your platform:
+
+- Linux: `~/.vst3/presets/MonkSynth/MonkSynth/`
+- macOS: `~/Library/Audio/Presets/MonkSynth/MonkSynth/`
+- Windows: `%APPDATA%\VST3 Presets\MonkSynth\MonkSynth\` (the folder the installer uses)
+
+Most hosts pick them up on the next plug-in rescan.
+
 ## Themes
 
 On first launch, MonkSynth shows a setup screen where you can import the classic look from the original Delay Lama DLL (available as freeware from [audionerdz.nl](http://www.audionerdz.nl/download.htm)). That's the recommended path. The setup screen also offers the built-in "Smiley Face..." theme by gav as a one-click alternative if you'd rather not hunt down the DLL.
