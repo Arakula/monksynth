@@ -266,7 +266,12 @@ void Controller::showSetupOverlay(VST3Editor *editor) {
             }
         },
         1000);
-    Call::later(folderImport);
+    // Only schedule the deferred call when there is something to import.
+    // On Linux a deferred call is a one-shot timer on the host's run loop,
+    // and one left pending when the editor closes right after opening
+    // (pluginval's editor tests do exactly that) outlives the frame.
+    if (findFolderDll())
+        Call::later(folderImport);
 }
 
 void Controller::presentOverlay(VST3Editor *editor, OverlayView *view) {
