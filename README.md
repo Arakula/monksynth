@@ -12,6 +12,10 @@ A monophonic vocal synthesizer that sounds like a monk chanting. Built using for
 
 *MonkSynth v0.0.1-beta.1 in Ableton Live 12, with the classic theme imported from the original Delay Lama DLL*
 
+[![Beach Boys - Delay Lama Only Knows, by Kasper Gutgesell (YouTube)](https://img.youtube.com/vi/OPYHfdQsWG8/maxresdefault.jpg)](https://www.youtube.com/watch?v=OPYHfdQsWG8)
+
+*The sound in action: [Beach Boys - Delay Lama Only Knows](https://www.youtube.com/watch?v=OPYHfdQsWG8) by Kasper Gutgesell (click to watch on YouTube)*
+
 ## Features
 
 - FOF synthesis engine producing realistic vocal formants
